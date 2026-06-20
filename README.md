@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@f616b4e -->
+<!-- docs: sync from coderbuzz/codex@8a99d5c -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
