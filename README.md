@@ -1,9 +1,15 @@
-<!-- docs: sync from coderbuzz/codex@cd4a13b -->
+<!-- docs: sync from coderbuzz/codex@46af4b9 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
 > Runtime-agnostic schema validation for TypeScript. Faster than Zod. Smaller than Yup. Smarter than Joi.
 > AI agents: see [AI_KNOWLEDGE.md](https://github.com/coderbuzz/veta/blob/main/AI_KNOWLEDGE.md) for expert context.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@coderbuzz/veta"><img src="https://img.shields.io/npm/v/@coderbuzz/veta.svg?style=flat-square" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@coderbuzz/veta"><img src="https://img.shields.io/npm/dm/@coderbuzz/veta.svg?style=flat-square" alt="npm downloads" /></a>
+  <a href="https://github.com/coderbuzz/veta/blob/main/LICENSE"><img src="https://img.shields.io/github/license/coderbuzz/veta.svg?style=flat-square" alt="MIT License" /></a>
+  <a href="https://github.com/coderbuzz/veta"><img src="https://img.shields.io/github/stars/coderbuzz/veta.svg?style=flat-square" alt="GitHub Stars" /></a>
+</p>
 
 **Veta** is a next-generation schema validation library designed from the ground up for TypeScript ergonomics. Zero dependencies. Full type inference. Built-in coercion. Sync _and_ async pipelines. Context forwarding. Schema metadata for serialization. All in a single, lightweight package that runs on **Bun, Deno, and Node.js**.
 
