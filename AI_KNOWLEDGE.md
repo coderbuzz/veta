@@ -1,3 +1,5 @@
+<!-- docs: sync from coderbuzz/codex@796aac1 -->
+
 # VETA — AI Agent Knowledge File
 
 **Package:** `@coderbuzz/veta` v0.1.3\

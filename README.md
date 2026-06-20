@@ -1,3 +1,5 @@
+<!-- docs: sync from coderbuzz/codex@796aac1 -->
+
 # Veta &mdash; `@coderbuzz/veta`
 
 > Runtime-agnostic schema validation for TypeScript. Faster than Zod. Smaller than Yup. Smarter than Joi.
@@ -43,11 +45,11 @@ Full results at **[github.com/coderbuzz/benchmarks](https://github.com/coderbuzz
 All tests on Apple M-series, Bun runtime. Higher is better.
 
 | Scenario | @coderbuzz/veta | Zod | Factor |
-|---|---|---|---|
-| Simple object `{ name, age, active }` | **24.75M ops/s** | 4.13M | **6.0x** |
-| Complex nested object + coercion | **4.16M ops/s** | 1.08M | **3.9x** |
-| Coercion `coerce(number/boolean/string/date)` | **11.63M ops/s** | 2.40M | **4.9x** |
-| Error handling (invalid input) | **1.25M ops/s** | 0.84M | **1.5x** |
+|---|---|---|---|---|
+| Simple object `{ name, age, active }` | **20.52M ops/s** | 2.80M | **7.3x** |
+| Complex nested object + coercion | **3.22M ops/s** | 0.92M | **3.5x** |
+| Coercion `coerce(number/boolean/string/date)` | **10.24M ops/s** | 2.16M | **4.7x** |
+| Error handling (invalid input) | **1.24M ops/s** | 0.83M | **1.5x** |
 
 > See the benchmarks repo for full methodology, machine specs, and run scripts.
 
