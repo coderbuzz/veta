@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@f616b4e -->
+<!-- docs: sync from coderbuzz/codex@cd4a13b -->
 
 # VETA — AI Agent Knowledge File
 
