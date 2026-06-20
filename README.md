@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@d0bc006 -->
+<!-- docs: sync from coderbuzz/codex@f616b4e -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -45,7 +45,7 @@ Full results at **[github.com/coderbuzz/benchmarks](https://github.com/coderbuzz
 All tests on Apple M-series, Bun runtime. Higher is better.
 
 | Scenario | @coderbuzz/veta | Zod | Factor |
-|---|---|---|---|---|
+|---|---|---|---|
 | Simple object `{ name, age, active }` | **20.52M ops/s** | 2.80M | **7.3x** |
 | Complex nested object + coercion | **3.22M ops/s** | 0.92M | **3.5x** |
 | Coercion `coerce(number/boolean/string/date)` | **10.24M ops/s** | 2.16M | **4.7x** |
