@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@796aac1 -->
+<!-- docs: sync from coderbuzz/codex@d0bc006 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -9,7 +9,7 @@
 
 ---
 
-## Why Veta Over Zod, Yup, or Joi?
+## Why Veta over Zod, Yup, or Joi?
 
 | Pain Point | Zod | Yup | Joi | **Veta** |
 |---|---|---|---|---|
