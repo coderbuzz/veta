@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { string, number, boolean, object, array, optional, InferObject } from "@coderbuzz/veta";
+import { string, number, boolean, object, array, optional, InferObject } from "../src/index";
 
 test("string validates", () => {
   const s = string();
