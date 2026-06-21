@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@46af4b9 -->
+<!-- docs: sync from coderbuzz/codex@e5210d1 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -9,6 +9,8 @@
   <a href="https://www.npmjs.com/package/@coderbuzz/veta"><img src="https://img.shields.io/npm/dm/@coderbuzz/veta.svg?style=flat-square" alt="npm downloads" /></a>
   <a href="https://github.com/coderbuzz/veta/blob/main/LICENSE"><img src="https://img.shields.io/github/license/coderbuzz/veta.svg?style=flat-square" alt="MIT License" /></a>
   <a href="https://github.com/coderbuzz/veta"><img src="https://img.shields.io/github/stars/coderbuzz/veta.svg?style=flat-square" alt="GitHub Stars" /></a>
+  <a href="https://github.com/coderbuzz/codex/actions/workflows/ci.veta.yml"><img src="https://github.com/coderbuzz/codex/actions/workflows/ci.veta.yml/badge.svg" alt="CI" /></a>
+  <a href="https://codecov.io/gh/coderbuzz/codex"><img src="https://codecov.io/gh/coderbuzz/codex/graph/badge.svg?flag=veta" alt="Codecov" /></a>
 </p>
 
 **Veta** is a next-generation schema validation library designed from the ground up for TypeScript ergonomics. Zero dependencies. Full type inference. Built-in coercion. Sync _and_ async pipelines. Context forwarding. Schema metadata for serialization. All in a single, lightweight package that runs on **Bun, Deno, and Node.js**.
