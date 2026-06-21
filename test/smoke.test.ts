@@ -2,13 +2,15 @@ import { test, expect } from "bun:test";
 import { string, number, boolean, object, array, optional, InferObject } from "@coderbuzz/veta";
 
 test("string validates", () => {
-  expect(string("hello")).toBe("hello");
-  expect(() => string(undefined)).toThrow();
+  const s = string();
+  expect(s("hello")).toBe("hello");
+  expect(() => s(undefined)).toThrow();
 });
 
 test("number validates", () => {
-  expect(number(42)).toBe(42);
-  expect(() => number("x")).toThrow();
+  const n = number();
+  expect(n(42)).toBe(42);
+  expect(() => n("x")).toThrow();
 });
 
 test("object validates", () => {
