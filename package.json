@@ -1,0 +1,11 @@
+{
+  "name": "@coderbuzz/veta-ci",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@coderbuzz/veta": "latest"
+  }
+}
