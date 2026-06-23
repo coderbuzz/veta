@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@e9b6bce -->
+<!-- docs: sync from coderbuzz/codex@b1e2bde -->
 
 # VETA — AI Agent Knowledge File
 
@@ -18,6 +18,101 @@ validated value on success. Every function exported from `@coderbuzz/veta` eithe
 
 ```
 validator = (val: any, ctx?: any) => T    // throws on invalid, returns T on valid
+```
+
+---
+
+## Why Veta over Zod, Yup, or Joi?
+
+| Pain Point | Zod | Yup | Joi | **Veta** |
+|---|---|---|---|---|
+| Nested object syntax | Must wrap every level with `z.object()` | Same | Same | **Shorthand**: plain objects auto-detect |
+| Type coercion | `z.coerce.xxx()` or custom transforms | `.cast()` only | Separate module | **Built-in `coerce()`** — one function |
+| Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
+| Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
+| Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol** — use for codecs/serialization |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip** — zero deps |
+
+Veta matches Zod's type inference quality while being significantly lighter and adding features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
+
+---
+
+## Benchmarks
+
+Full results at **[github.com/coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks)**.
+
+All tests on Apple M-series, Bun runtime. Higher is better.
+
+| Scenario | @coderbuzz/veta | Zod | Factor |
+|---|---|---|---|
+| Simple object `{ name, age, active }` | **20.52M ops/s** | 2.80M | **7.3x** |
+| Complex nested object + coercion | **3.22M ops/s** | 0.92M | **3.5x** |
+| Coercion `coerce(number/boolean/string/date)` | **10.24M ops/s** | 2.16M | **4.7x** |
+| Error handling (invalid input) | **1.24M ops/s** | 0.83M | **1.5x** |
+
+---
+
+## Comparison Examples
+
+### Veta vs Zod: Nested Schema
+
+```ts
+// Zod — every level needs wrapping
+const zodSchema = z.object({
+  user: z.object({
+    profile: z.object({
+      name: z.string(),
+      tags: z.array(z.string()),
+    }),
+  }),
+});
+
+// Veta — shorthand auto-detects nested objects and arrays
+const vetaSchema = object({
+  user: {
+    profile: {
+      name: string(),
+      tags: [string()],
+    },
+  },
+});
+```
+
+### Veta vs Zod: Coercion
+
+```ts
+// Zod — separate API surface
+const zCoerce = z.object({
+  id: z.coerce.number(),
+  active: z.coerce.boolean(),
+});
+
+// Veta — one function, consistent
+const vCoerce = object({
+  id: coerce(number()),
+  active: coerce(boolean()),
+});
+```
+
+### Veta vs Zod: Async Validation
+
+```ts
+// Zod — no built-in async object validation; manual Promise.all required
+
+// Veta — declarative async API with concurrent execution
+const checkUsername = async (val: unknown) => {
+  const name = string({ min: 3 })(val);
+  const exists = await db.users.exists({ name });
+  if (exists) throw new Error("Username already taken");
+  return name;
+};
+
+const createAccount = objectAsync({
+  username: checkUsername,
+  displayName: string({ min: 1 }),
+  role: optional(string()),
+});
+// All fields validated concurrently via Promise.all
 ```
 
 ---
@@ -79,8 +174,15 @@ string({ min: 3, max: 50, pattern: /^\w+$/ });
 coerce(string()); // String(val) — accepts anything non-null/undefined
 ```
 
-Strict rejects: `null` → "Required", `undefined` → "Required", `123` → "Invalid
-string: expected string, got number"
+| Option | Type | Description |
+|---|---|---|
+| `min` | `ValidationRule<number>` | Minimum string length (inclusive) |
+| `max` | `ValidationRule<number>` | Maximum string length (inclusive) |
+| `pattern` | `ValidationRule<RegExp>` | Regex pattern to test against |
+| `message` | `string` | Fallback message for all validation errors |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
+Strict rejects: `null` → "Required", `undefined` → "Required", `123` → "Invalid string: expected string, got number"
 
 ### number(options?)
 
@@ -92,8 +194,14 @@ number({ min: 1, max: 999 });
 coerce(number()); // Number(val) — empty string throws
 ```
 
-Strict rejects: `null`/`undefined` → "Required", `"123"` → "Invalid number",
-`NaN` → "Invalid number"
+| Option | Type | Description |
+|---|---|---|
+| `min` | `ValidationRule<number>` | Minimum value (inclusive) |
+| `max` | `ValidationRule<number>` | Maximum value (inclusive) |
+| `message` | `string` | Fallback message for all validation errors |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
+Strict rejects: `null`/`undefined` → "Required", `"123"` → "Invalid number", `NaN` → "Invalid number"
 
 ### boolean(options?)
 
@@ -101,6 +209,11 @@ Strict rejects: `null`/`undefined` → "Required", `"123"` → "Invalid number",
 boolean(); // strict: only true/false
 coerce(boolean()); // "true","1",1 → true; "false","0",0 → false
 ```
+
+| Option | Type | Description |
+|---|---|---|
+| `message` | `string` | Fallback message for all validation errors |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
 
 Strict rejects: `"true"` → "Invalid boolean: expected boolean, got string"
 
@@ -113,6 +226,13 @@ date({ max: new Date("2030-12-31") });
 coerce(date()); // new Date(val) — parses ISO strings, timestamps
 ```
 
+| Option | Type | Description |
+|---|---|---|
+| `min` | `ValidationRule<Date>` | Earliest allowed date (inclusive) |
+| `max` | `ValidationRule<Date>` | Latest allowed date (inclusive) |
+| `message` | `string` | Fallback message |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
 ### bigint(options?)
 
 ```ts
@@ -122,6 +242,13 @@ bigint({ max: 9999n });
 coerce(bigint()); // BigInt(val) — "123" → 123n; floats (1.5) throw
 ```
 
+| Option | Type | Description |
+|---|---|---|
+| `min` | `ValidationRule<bigint>` | Minimum value (inclusive) |
+| `max` | `ValidationRule<bigint>` | Maximum value (inclusive) |
+| `message` | `string` | Fallback message |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
 ### uint8array(options?)
 
 ```ts
@@ -130,6 +257,13 @@ uint8array({ min: 4 }); // min byte length
 uint8array({ max: 256 }); // max byte length
 // No coerce variant
 ```
+
+| Option | Type | Description |
+|---|---|---|
+| `min` | `ValidationRule<number>` | Minimum byte length (inclusive) |
+| `max` | `ValidationRule<number>` | Maximum byte length (inclusive) |
+| `message` | `string` | Fallback message |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
 
 ### any() and unknown()
 
@@ -194,6 +328,16 @@ nullish(coerce(boolean())); // undefined | null | boolean
 ```
 
 `coerce()` preserves `METADATA` from the inner validator.
+
+### Coercion Rules by Type
+
+| Type | Coerce behavior |
+|---|---|
+| `string` | `String(val)` |
+| `number` | `Number(val)` — empty string throws |
+| `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
+| `date` | `new Date(val)` — invalid dates throw |
+| `bigint` | `BigInt(val)` — floats and non-numeric strings throw |
 
 ---
 
@@ -266,8 +410,15 @@ schema({ name: "John", userAge: "30", profile: { role: "admin" } });
 // → { name: "John", age: 30, role: "admin" }
 ```
 
-Works at any nesting level and with `nullable`, `nullish`, `optional`, `array`,
-`union`:
+### `.map()` Mapping Options per Key
+
+| Value type | Behavior |
+|---|---|
+| `string` | Read from `input[altKey]` |
+| `function` | Call `mapFn(input)` and pass result to validator |
+| _(omitted)_ | Read from `input[key]` as normal |
+
+`.map()` supports nesting and works alongside `optional`, `nullable`, `nullish`, `array`, and `union`:
 
 ```ts
 object({
@@ -709,6 +860,90 @@ const slugify = pipe([
 
 ---
 
+## Migration Guide: Zod → Veta
+
+Most migrations from Zod are straightforward. Here are the key differences:
+
+| Zod | Veta |
+|---|---|
+| `z.string()` | `string()` |
+| `z.number()` | `number()` |
+| `z.boolean()` | `boolean()` |
+| `z.date()` | `date()` |
+| `z.bigint()` | `bigint()` |
+| `z.any()` | `any()` |
+| `z.unknown()` | `unknown()` |
+| `z.object({})` | `object({})` |
+| `z.array(z.string())` | `array(string())` or shorthand `[string()]` |
+| `z.tuple([...])` | `tuple([...])` or shorthand `[a, b]` with >1 element |
+| `z.union([...])` | `union([...])` |
+| `z.literal(v)` | `literal(v)` |
+| `z.optional(z.string())` | `optional(string())` |
+| `z.nullable(z.string())` | `nullable(string())` |
+| `z.string().min(3)` | `string({ min: 3 })` |
+| `z.string().max(100)` | `string({ max: 100 })` |
+| `z.string().regex(/^a+$/)` | `string({ pattern: /^a+$/ })` |
+| `z.coerce.number()` | `coerce(number())` |
+| `.transform(fn)` | `pipe([validate, fn])` |
+| `z.undefined()` | Used `optional()` |
+| `.parse()` | Call as function: `schema(val)` |
+| `.safeParse()` | Wrap in try-catch |
+| `z.infer<typeof S>` | `InferObject<typeof S>` |
+
+**Key behavioral differences:**
+1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
+2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
+3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
+4. Veta **throws on invalid input** — there's no `.safeParse()` equivalent; use try-catch
+5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
+
+---
+
+## Complete Example
+
+```ts
+import {
+  array, boolean, coerce, date, type InferObject,
+  literal, nullable, number, object, optional, pipe, string, union,
+} from "@coderbuzz/veta";
+
+const addressShape = {
+  street: string(),
+  city: string(),
+  zip: string({ pattern: /^\d{5}$/, message: "Invalid ZIP code" }),
+};
+
+const userSchema = object({
+  id: coerce(number({ min: 1 })),
+  name: string({ min: 2, max: 100 }),
+  email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
+  role: union([literal("admin"), literal("editor"), literal("viewer")]),
+  birthDate: nullable(coerce(date())),
+  address: optional(addressShape),       // shorthand — no object() needed
+  tags: optional([string()]),            // shorthand — no array() needed
+  scores: [coerce(number())],            // shorthand — always required
+});
+
+type User = InferObject<typeof userSchema>;
+
+const user = userSchema({
+  id: "42",
+  name: "Jane Smith",
+  email: "  jane@example.com  ",
+  role: "admin",
+  birthDate: null,
+  address: { street: "123 Main St", city: "Springfield", zip: "62701" },
+  tags: ["admin", "owner"],
+  scores: ["95", "87", "100"],
+});
+// { id: 42, name: "Jane Smith", email: "jane@example.com",
+//   role: "admin", birthDate: null,
+//   address: { street: "123 Main St", city: "Springfield", zip: "62701" },
+//   tags: ["admin", "owner"], scores: [95, 87, 100] }
+```
+
+---
+
 ## Gotchas & Edge Cases
 
 1. **`optional()` does NOT pass `null`** — use `nullable()` or `nullish()` for
@@ -734,6 +969,100 @@ const slugify = pipe([
     `coerce()` is a no-op on them.
 13. **`.map()` is evaluated at call time on the whole object** — the mapping
     function receives the full input object, not the individual property value.
+
+---
+
+## Internal Behavior
+
+### Validation Pipeline
+
+Every validator follows a consistent lifecycle:
+
+```
+input → type check (strict/coerced) → constraint checks → return value
+             ↓ invalid
+          throw Error(message)
+```
+
+1. **Type check** — if value is `undefined`/`null`, throw `"Required"` (or `requiredMessage`). In coerce mode, attempt type conversion first.
+2. **Constraint checks** — validate `min`, `max`, `pattern` etc. in deterministic order. First failure wins.
+3. **Return** — validated (and possibly coerced/transformed) value.
+
+### Shorthand Normalization
+
+Happens once at schema construction time. The `shape` object is walked recursively:
+
+```
+shape entry → value type detection:
+  ├─ Array<Validator> with 1 element     → array(elementValidator)
+  ├─ Array<Validator> with >1 elements   → tuple(validators)
+  ├─ Plain object (no call signature)    → object(shape)
+  └─ Function                            → keep as-is (custom validator)
+```
+
+This means shorthand overhead is **zero at call time** — the normalized schema is identical to the fully-qualified version.
+
+### Object Validation Pipeline
+
+```
+object({ a: validatorA, b: validatorB })(input, ctx)
+  ├─ Check: is input an object? → else throw "Invalid object"
+  ├─ For each declared key:
+  │   └─ validator(input[key], ctx) → store result
+  └─ Return new object with only validated keys (extra keys stripped)
+```
+
+Errors from nested properties include the key name: `Property "key": <inner message>`.
+
+### Array Validation Pipeline
+
+```
+array(validator)(input, ctx)
+  ├─ Check: is input an array? → else throw "Invalid array"
+  ├─ Check min/max length constraints
+  ├─ For each element:
+  │   └─ validator(element, ctx) → store result
+  └─ Return validated array
+```
+
+Errors from individual elements include the index: `Item at index N: <inner message>`.
+
+### Async Concurrency Model
+
+| Validator | Execution Strategy |
+|---|---|
+| `objectAsync` | All field validators run **concurrently** via `Promise.all` |
+| `arrayAsync` | All element validators run **concurrently** via `Promise.all` |
+| `tupleAsync` | All position validators run **concurrently** via `Promise.all` |
+| `unionAsync` | Validators tried **sequentially** (each awaited before next) |
+| `pipeAsync` | Validators run **sequentially** (each output feeds next input) |
+
+Concurrent validators in `objectAsync`/`arrayAsync`/`tupleAsync` execute in parallel — a slow field/element does not block others.
+
+### Context (ctx) Propagation
+
+`ctx` is passed as the second argument to every validator in the tree:
+
+```ts
+schema(input, ctx)
+  → object({ a: vA, b: object({ c: vC }) })(input, ctx)
+    → vA(input.a, ctx)
+    → object({ c: vC })(input.b, ctx)
+      → vC(input.b.c, ctx)
+```
+
+All composition helpers (`optional`, `nullable`, `nullish`, `array`, `tuple`, `union`, `pipe`) forward `ctx`. The propagation is synchronous and zero-overhead — `ctx` is a direct argument, never stored or wrapped.
+
+### METADATA Propagation Rules
+
+| Wrapper | METADATA behavior |
+|---|---|
+| `coerce(validator)` | Preserves inner validator's metadata |
+| `pipe(validators)` | Uses **last** validator's metadata |
+| `optional(validator)` | `{ type: "optional", inner: <metadata> }` |
+| `nullable(validator)` | `{ type: "nullable", inner: <metadata> }` |
+| `nullish(validator)` | `{ type: "nullish", inner: <metadata> }` |
+| Custom function | No metadata attached |
 
 ---
 

@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@e9b6bce -->
+<!-- docs: sync from coderbuzz/codex@b1e2bde -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -833,6 +833,31 @@ Additional utility types:
 | `InferAsyncEntry<T>`  | Infers the async output type of a single shape entry                |
 | `ValidationRule<T>`   | `T \| { value: T; message: string }` — for custom per-rule messages |
 | `TypeMeta`            | Discriminated union describing the shape of a validator             |
+
+```ts
+import type { InferEntry, InferAsyncEntry } from "@coderbuzz/veta";
+import { coerce, number, object, optional, string } from "@coderbuzz/veta";
+
+// InferEntry: extract output type from a single validator
+type TagType = InferEntry<typeof string>;
+// string
+
+type CountType = InferEntry<typeof number>;
+// number
+
+// InferAsyncEntry: extract async output type from a single entry
+const asyncLookup = async (val: any) => {
+  const id = coerce(number())(val);
+  return await db.findById(id);
+};
+type LookupType = InferAsyncEntry<typeof asyncLookup>;
+// Awaited<ReturnType<typeof asyncLookup>>
+
+// Full shape inference
+const shape = { id: number(), name: string(), role: optional(string()) };
+type Entity = InferObject<typeof shape>;
+// { id: number; name: string; role?: string | undefined }
+```
 
 ---
 
