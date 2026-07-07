@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@8746dea -->
+<!-- docs: sync from coderbuzz/codex@434a798 -->
 
 # VETA — AI Agent Knowledge File
 
@@ -12,7 +12,7 @@
 ## Mental Model
 
 `veta` validators are **plain functions** with the signature
-`(val: any, ctx?: any) => T`. They throw `Error` on invalid input and return the
+`(val: any, ctx?: any) => T`. They throw `VetaError` on invalid input and return the
 validated value on success. Every function exported from `@coderbuzz/veta` either
 **creates** a validator function or **wraps** one.
 
@@ -155,6 +155,7 @@ import {
   union,
   unionAsync,
   unknown,
+  VetaError,
   type ValidationRule,
 } from "@coderbuzz/veta";
 ```
@@ -696,7 +697,74 @@ validator in the chain.
 
 ---
 
-## Error Message Reference
+## VetaError — Custom Error Class
+
+All validators throw `VetaError` (extends `Error`) on invalid input:
+
+```ts
+import { VetaError, string } from "@coderbuzz/veta";
+
+try {
+  string({ min: 3 })(input);
+} catch (err) {
+  if (err instanceof VetaError) {
+    err.name;    // "VetaError"
+    err.message; // "String too short (min: 3)"
+    err.path;    // [] — empty for primitives, populated in compound validators
+  }
+}
+```
+
+### VetaError API
+
+| Property  | Type                     | Description                                         |
+|-----------|--------------------------|-----------------------------------------------------|
+| `name`    | `"VetaError"`            | Always `"VetaError"` — use for `err.name` checks    |
+| `message` | `string`                 | Human-readable error description                    |
+| `path`    | `(string \| number)[]`   | Structured traversal path to the failing field      |
+
+The `path` property tracks where the failure occurred in nested schemas:
+
+```ts
+const schema = object({
+  users: array(object({
+    email: string({ pattern: /@/ }),
+  })),
+});
+
+try {
+  schema({ users: [{ email: "alice@x" }, { email: "bob" }] });
+} catch (err) {
+  if (err instanceof VetaError) {
+    err.message; // 'Item at index 1: Property "email": String does not match pattern: /@/'
+    err.path;    // ['users', 1, 'email']
+  }
+}
+```
+
+Path segments:
+- Object keys → `string` (e.g. `"email"`, `"name"`)
+- Array/tuple indices → `number` (e.g. `0`, `1`)
+- Primitive validators → empty array `[]`
+
+### Catching VetaError in HTTP Frameworks
+
+```ts
+try {
+  return schema(req.body);
+} catch (err) {
+  if (err instanceof VetaError) {
+    ctx.status(400);
+    return { error: err.message, path: err.path };
+  }
+  ctx.status(500);
+  return { error: "Internal server error" };
+}
+```
+
+Since `VetaError` extends `Error`, existing `toThrow()` tests continue to work.
+
+### Error Message Reference
 
 | Situation             | Default message                                   |
 | --------------------- | ------------------------------------------------- |
@@ -887,14 +955,14 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `.transform(fn)` | `pipe([validate, fn])` |
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
-| `.safeParse()` | Wrap in try-catch |
+| `.safeParse()` | Catch `VetaError` in try-catch |
 | `z.infer<typeof S>` | `InferObject<typeof S>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
 3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
-4. Veta **throws on invalid input** — there's no `.safeParse()` equivalent; use try-catch
+4. Veta **throws `VetaError` on invalid input** — there's no `.safeParse()` equivalent; catch `VetaError` in try-catch
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
 ---
@@ -981,7 +1049,7 @@ Every validator follows a consistent lifecycle:
 ```
 input → type check (strict/coerced) → constraint checks → return value
              ↓ invalid
-          throw Error(message)
+          throw VetaError(message, path)
 ```
 
 1. **Type check** — if value is `undefined`/`null`, throw `"Required"` (or `requiredMessage`). In coerce mode, attempt type conversion first.

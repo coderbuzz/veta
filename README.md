@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@8746dea -->
+<!-- docs: sync from coderbuzz/codex@434a798 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -926,7 +926,27 @@ Notes:
 
 ## Error Reference
 
-All errors are plain `Error` instances. Messages follow a consistent pattern:
+All validators throw `VetaError` (exported from `@coderbuzz/veta`) when validation fails.
+`VetaError` extends `Error` — use `err instanceof VetaError` to distinguish validation
+failures from other runtime errors.
+
+```ts
+import { VetaError, string } from "@coderbuzz/veta";
+
+try {
+  string({ min: 3 })(input);
+} catch (err) {
+  if (err instanceof VetaError) {
+    console.log(err.message); // "String too short (min: 3)"
+    console.log(err.path);    // [] — structured path to the failing field
+  }
+}
+```
+
+`path` tracks traversal through nested objects, arrays, and tuples:
+`["users", 1, "email"]` for the 2nd user's email field.
+
+Messages follow a consistent pattern:
 
 | Situation                | Message pattern                                                |
 | ------------------------ | -------------------------------------------------------------- |
@@ -1035,14 +1055,14 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `.transform(fn)` | `pipe([validate, fn])` |
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
-| `.safeParse()` | Wrap in try-catch |
+| `.safeParse()` | Catch `VetaError` in try-catch |
 | `z.infer<typeof S>` | `InferObject<typeof S>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
 3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
-4. Veta **throws on invalid input** — there's no `.safeParse()` equivalent; use try-catch
+4. Veta **throws `VetaError` on invalid input** — there's no `.safeParse()` equivalent; catch `VetaError` in try-catch
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
 ---
