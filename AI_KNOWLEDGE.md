@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@434a798 -->
+<!-- docs: sync from coderbuzz/codex@ba4a5ed -->
 
 # VETA — AI Agent Knowledge File
 
@@ -185,15 +185,39 @@ coerce(string()); // String(val) — accepts anything non-null/undefined
 
 Strict rejects: `null` → "Required", `undefined` → "Required", `123` → "Invalid string: expected string, got number"
 
+**`pattern` flags.** A validator closes over one RegExp object for its whole
+lifetime, and `RegExp.prototype.test()` on a `/g` or `/y` regex mutates that
+object's `lastIndex`. The same input would then pass on one call and fail on the
+next, with the parity depending on how much unrelated traffic the process has
+served — invisible in a unit test that calls once, and reproducible only in
+production. So the flags are handled when the validator is constructed:
+
+- `/g` is stripped (a whole-string match never needed it); other flags survive,
+  e.g. `/^inv-\d+$/gi` keeps `i`.
+- `/y` throws from `string()` itself, since sticky also changes where the match
+  starts, so stripping it would silently change the pattern's meaning.
+- The rewritten regex is what appears in the default
+  `String does not match pattern: ...` message.
+
 ### number(options?)
 
 ```ts
-number(); // strict: only number (not NaN)
+number(); // strict: only finite numbers
 number({ min: 0 }); // inclusive minimum
 number({ max: 100 }); // inclusive maximum
 number({ min: 1, max: 999 });
 coerce(number()); // Number(val) — empty string throws
 ```
+
+**Rejects every non-finite value**, strict and coerced: `NaN`, `Infinity`,
+`-Infinity` → `Invalid number: expected a finite number, got <value>`. `min`/`max`
+are not a substitute — `Infinity >= 0`, so a lower bound alone lets it through,
+and lower-bound-only is the usual shape of an amount field.
+`JSON.parse('{"amount":1e400}')` produces `Infinity` with no error at all, so the
+value reaches the validator directly from a request body; once it is in an
+arithmetic chain, `Infinity - Infinity` is `NaN` and every aggregate touching
+that row is poisoned. `coerce(number())("1e400")` is rejected for the same
+reason.
 
 | Option | Type | Description |
 |---|---|---|
@@ -544,6 +568,14 @@ metadata.
 All async variants accept both sync and async validators in their shapes. Sync
 validators run immediately; async validators run concurrently via `Promise.all`
 (for object/array/tuple).
+
+**Mixed sync/async failure.** When a sync validator throws while async siblings
+are still pending, the container rejects with the sync error — `Promise.all` is
+never reached. The pending children are given a no-op rejection handler first,
+so a child that also fails does not surface as an unhandled rejection (which
+Node terminates the process for by default, and which would carry no request or
+tenant context in the log). Only the first sync failure is reported; there is no
+collect-all mode yet, so a payload with several problems still yields one error.
 
 ### objectAsync
 

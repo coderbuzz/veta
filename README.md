@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@434a798 -->
+<!-- docs: sync from coderbuzz/codex@ba4a5ed -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -206,6 +206,13 @@ v(123); // throws "Invalid string: expected string, got number"
 Strict by default — only accepts `string` values. Use `coerce(string())` to cast
 any value via `String(val)`.
 
+**`pattern` must not be sticky, and `/g` is ignored.** `.test()` on a `/g` or
+`/y` regex advances `lastIndex` on the regex object, which the validator holds
+for its whole lifetime — the same input would then pass and fail on alternate
+calls, across requests. A `/g` flag is dropped when the validator is built
+(other flags are kept); a `/y` flag throws, because it also changes what the
+pattern matches.
+
 ---
 
 ### `number(options?)`
@@ -215,7 +222,8 @@ const v = number({ min: 0, max: 100 });
 v(50); // 50
 v(-1); // throws "Number too small (min: 0)"
 v("50"); // throws "Invalid number: expected number, got string"
-v(NaN); // throws "Invalid number: ..."
+v(NaN); // throws "Invalid number: expected a finite number, got NaN"
+v(Infinity); // throws "Invalid number: expected a finite number, got Infinity"
 ```
 
 **Options:**
@@ -227,8 +235,14 @@ v(NaN); // throws "Invalid number: ..."
 | `message`         | `string`                 | Fallback message for all validation errors  |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null` |
 
-Strict by default — only accepts `number` (not `NaN`). Use `coerce(number())` to
-cast via `Number(val)`. Empty strings throw even in coerce mode.
+Strict by default — only accepts finite numbers: `NaN`, `Infinity` and
+`-Infinity` are all rejected, in coerce mode too. This matters for amounts,
+because `min` alone does not stop infinity (`Infinity >= 0`) and
+`JSON.parse('{"amount":1e400}')` yields `Infinity` without any error — so it can
+arrive straight from a request body and turn a balance into `NaN`.
+
+Use `coerce(number())` to cast via `Number(val)`. Empty strings throw even in
+coerce mode.
 
 ---
 
@@ -952,6 +966,7 @@ Messages follow a consistent pattern:
 | ------------------------ | -------------------------------------------------------------- |
 | `undefined`/`null` input | `"Required"` (or `requiredMessage`)                            |
 | Wrong type               | `"Invalid string: expected string, got number"`                |
+| Non-finite number        | `"Invalid number: expected a finite number, got Infinity"`     |
 | Constraint failed        | `"String too short (min: 3)"`, `"Number too large (max: 100)"` |
 | Object property error    | `"Property \"key\": <inner message>"`                          |
 | Array element error      | `"Item at index 2: <inner message>"`                           |
