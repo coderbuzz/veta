@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@d28b4e9 -->
+<!-- docs: sync from coderbuzz/codex@f1c7197 -->
 
 # VETA — AI Agent Knowledge File
 
@@ -146,6 +146,8 @@ import {
   objectAsync,
   optional,
   pipe,
+  safeParse,
+  safeParseAsync,
   pipeAsync,
   // Primitives
   string,
@@ -869,6 +871,58 @@ try {
 
 Since `VetaError` extends `Error`, existing `toThrow()` tests continue to work.
 
+## safeParse — every failure, not just the first
+
+```ts
+safeParse<T>(validator, value, ctx?): 
+  | { ok: true; value: T }
+  | { ok: false; issues: VetaIssue[] }
+
+safeParseAsync<T>(validator, value, ctx?): Promise<...>   // objectAsync/arrayAsync/tupleAsync
+
+interface VetaIssue { readonly path: (string | number)[]; readonly message: string }
+```
+
+```ts
+const result = safeParse(journal, { ref: 'x', lines: [{ account: 1, amount: '10.005' }] });
+if (!result.ok) {
+  result.issues;
+  // [
+  //   { path: ['ref'],                 message: 'String too short (min: 3)' },
+  //   { path: ['lines', 0, 'account'], message: 'Invalid string: expected string, got number' },
+  //   { path: ['lines', 0, 'amount'],  message: 'Too many fraction digits (max: 2)' },
+  // ]
+}
+```
+
+**How it works.** Compound validators take an optional third argument, an
+internal collector. `safeParse` supplies one; `object`, `array`, `tuple`, their
+async variants and the `optional`/`nullable`/`nullish` wrappers then record each
+child's failure and keep going instead of rethrowing. Without a collector —
+every call that is not `safeParse` — they take exactly the path they always
+took, and the cost is one `undefined` check per compound.
+
+**`issue.message` has no prefix.** It is the leaf validator's own message, not
+`Property "lines": Item at index 0: ...`. The path carries the location, and a
+form wants the two separately.
+
+**What stays a leaf, contributing one issue rather than several:**
+- `union()` — no single child to attribute a failure to
+- `pipe()` — a stage cannot run on a value the previous stage rejected
+- your own validators — they do not know about the collector
+
+**Async collection settles rather than races.** In collect mode
+`objectAsync`/`arrayAsync`/`tupleAsync` await every child and report all the
+failures, instead of rejecting on the first. Each child gets its own collector
+seeded with its path, because those children run concurrently and a shared path
+stack would interleave.
+
+**Partial results.** On failure only `issues` is returned; the partially-built
+value is not exposed, since half a journal entry is not something to act on.
+
+**Throwing is unchanged.** Calling a validator directly still stops at the first
+failure with the prefixed message and `VetaError.path`. `safeParse` is additive.
+
 ### Error Message Reference
 
 | Situation             | Default message                                   |
@@ -1060,14 +1114,14 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `.transform(fn)` | `pipe([validate, fn])` |
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
-| `.safeParse()` | Catch `VetaError` in try-catch |
+| `.safeParse()` | `safeParse(schema, val)` |
 | `z.infer<typeof S>` | `InferObject<typeof S>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
 3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
-4. Veta **throws `VetaError` on invalid input** — there's no `.safeParse()` equivalent; catch `VetaError` in try-catch
+4. Veta **throws `VetaError` on invalid input**; `safeParse(schema, val)` returns `{ ok, value | issues }` with every failure instead
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
 ---

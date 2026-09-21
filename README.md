@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@d28b4e9 -->
+<!-- docs: sync from coderbuzz/codex@f1c7197 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -1037,6 +1037,49 @@ Errors nest naturally for deep schemas:
 Property "departments": Item at index 0: Property "manager": Invalid email
 ```
 
+### Collecting every error
+
+Throwing stops at the first bad field. That is right for a hot path and wrong
+for a form — the user fixes one field, submits, and is told about the next one.
+`safeParse` returns all of them:
+
+```ts
+import { safeParse, object, array, string, decimal } from "@coderbuzz/veta";
+
+const journal = object({
+  ref: string({ min: 3 }),
+  lines: array(object({ account: string(), amount: decimal({ scale: 2 }) })),
+});
+
+const result = safeParse(journal, { ref: "x", lines: [{ account: 1, amount: "10.005" }] });
+
+if (!result.ok) {
+  result.issues;
+  // [
+  //   { path: ["ref"],                 message: "String too short (min: 3)" },
+  //   { path: ["lines", 0, "account"], message: "Invalid string: expected string, got number" },
+  //   { path: ["lines", 0, "amount"],  message: "Too many fraction digits (max: 2)" },
+  // ]
+} else {
+  result.value; // fully typed
+}
+```
+
+`safeParseAsync` is the counterpart for `objectAsync`/`arrayAsync`/`tupleAsync`
+schemas.
+
+Each issue's `message` is the leaf validator's own — without the
+`Property "x": Item at index 2:` prefixes the throwing form builds, since `path`
+already says where it happened and a form wants the two separately.
+
+`union()`, `pipe()` and your own custom validators stay leaves: a union has no
+single child to attribute a failure to, a pipe stage cannot run on a value the
+previous stage rejected, and a custom validator does not know about the
+collector. Each contributes one issue rather than several.
+
+Calling a validator directly is completely unaffected — it throws on the first
+failure exactly as before.
+
 ---
 
 ## Complete Example
@@ -1127,14 +1170,14 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `.transform(fn)` | `pipe([validate, fn])` |
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
-| `.safeParse()` | Catch `VetaError` in try-catch |
+| `.safeParse()` | `safeParse(schema, val)` |
 | `z.infer<typeof S>` | `InferObject<typeof S>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
 3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
-4. Veta **throws `VetaError` on invalid input** — there's no `.safeParse()` equivalent; catch `VetaError` in try-catch
+4. Veta **throws `VetaError` on invalid input**. Use `safeParse(schema, val)` when you want every failure at once instead — see [Collecting every error](#collecting-every-error)
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
 ---
