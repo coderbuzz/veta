@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@388339c -->
+<!-- docs: sync from coderbuzz/codex@5fc23c4 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -241,8 +241,17 @@ because `min` alone does not stop infinity (`Infinity >= 0`) and
 `JSON.parse('{"amount":1e400}')` yields `Infinity` without any error — so it can
 arrive straight from a request body and turn a balance into `NaN`.
 
-Use `coerce(number())` to cast via `Number(val)`. Empty strings throw even in
-coerce mode.
+`coerce(number())` accepts a `number`, or a `string` in plain decimal notation
+(optional sign, digits, optional fraction, optional exponent; surrounding
+whitespace is trimmed). Everything else is rejected — including `true`, `[]`,
+`{}`, `'0x10'` and `'1e400'`.
+
+It used to be `Number(val)`, which inherits every JavaScript conversion quirk,
+on the path query strings and form data take. `[]` was the dangerous one: a query
+parser that yields an array for a repeated parameter (`?amount=&amount=`) gave
+`[]`, which became a silent `0` — a payment field that should have failed
+validation recorded as a zero payment, found at bank reconciliation rather than
+at request time.
 
 ---
 
@@ -295,6 +304,13 @@ v("123"); // throws "Invalid bigint: expected bigint, got string"
 
 Use `coerce(bigint())` to cast strings and numbers via `BigInt(val)`. Float
 values like `1.5` throw even in coerce mode.
+
+**`coerce()` only wraps the primitives that define a coerced form** — `string`,
+`number`, `boolean`, `date`, `bigint`, `decimal`. Anything else throws where you
+write it. It used to return the validator unchanged, so
+`coerce(object({ amount: number() }))` looked like it coerced into the shape and
+did nothing at all — the strict `number()` inside then rejected every form value.
+Apply it to the fields instead: `object({ amount: coerce(number()) })`.
 
 **Options:** `min`, `max`, `message`, `requiredMessage` (same pattern as `number`)
 
@@ -863,9 +879,15 @@ const result = adResponseSchema(rawData, { ssp: "gam" });
 // result.ad.track.imp → "gam:url1", "gam:url2"
 ```
 
-Context is forwarded through: `object`, `array`, `tuple`, `union`, `pipe`,
-`optional`, `nullable`, `nullish`, `objectAsync`, `arrayAsync`, `tupleAsync`,
-`unionAsync`, `pipeAsync`.
+Context is forwarded through the **compound** validators: `object`, `array`,
+`tuple`, `union`, `pipe`, `optional`, `nullable`, `nullish`, `objectAsync`,
+`arrayAsync`, `tupleAsync`, `unionAsync`, `pipeAsync`.
+
+The built-in **leaf** validators — `string`, `number`, `boolean`, `date`,
+`bigint`, `decimal`, `uint8array`, `literal` — take one argument and ignore any
+context passed to them. They have no children to forward it to and no use for it
+themselves. Your own validators are where context is read; `withContext()` makes
+a missing one a clear failure rather than a `TypeError`.
 
 ---
 
@@ -1079,6 +1101,49 @@ collector. Each contributes one issue rather than several.
 
 Calling a validator directly is completely unaffected — it throws on the first
 failure exactly as before.
+
+### Why a union or pipe rejected a value
+
+`VetaError.issues` carries the reasons a composite validator gave up:
+
+```ts
+try {
+  union([cardPayment, cashPayment])({ kind: "card", number: "123" });
+} catch (err) {
+  err.message;  // "Value does not match any of the union types"
+  err.issues;
+  // [
+  //   { path: ["number"], message: "Variant 0: String too short (min: 16)" },
+  //   { path: ["kind"],   message: 'Variant 1: Value must be exactly: "cash"' },
+  // ]
+}
+```
+
+Without it, a failed union said only "Value does not match any of the union
+types" — not which variant came closest, not which field was wrong, not even
+that the problem was the card number. Answering that support ticket meant
+reproducing it with the user's payload.
+
+`pipe([...], { message })` does the same: the custom message is what you asked
+for, and the stage's own error is kept in `issues` rather than discarded.
+
+### Rejecting unknown keys
+
+```ts
+const patch = object({ memo: optional(string()) }, { unknownKeys: "error" });
+
+patch({ memmo: "audit correction" });  // throws: Unknown key: "memmo"
+```
+
+`unknownKeys` is `'strip'` by default — unchanged behaviour, keys the shape does
+not mention are dropped. `'error'` rejects them, `'passthrough'` copies them onto
+the result unvalidated.
+
+`'error'` is worth reaching for on a partial-update endpoint. With `'strip'`, a
+`PATCH` body of `{ "memmo": "audit correction" }` — a typo for `memo` — validates
+cleanly to `{}`, the update changes nothing, and the API answers 200. The user
+believes the note was saved. For records with audit consequences, succeeding
+while doing nothing is worse than failing.
 
 ### Validators that need a context
 

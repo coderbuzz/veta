@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@388339c -->
+<!-- docs: sync from coderbuzz/codex@5fc23c4 -->
 
 # VETA — AI Agent Knowledge File
 
@@ -210,7 +210,7 @@ number(); // strict: only finite numbers
 number({ min: 0 }); // inclusive minimum
 number({ max: 100 }); // inclusive maximum
 number({ min: 1, max: 999 });
-coerce(number()); // Number(val) — empty string throws
+coerce(number()); // number, or a decimal string — see below
 ```
 
 **Rejects every non-finite value**, strict and coerced: `NaN`, `Infinity`,
@@ -417,10 +417,11 @@ time.
 
 ```ts
 coerce(string()); // String(val)
-coerce(number()); // Number(val)
+coerce(number()); // number, or a decimal string
 coerce(boolean()); // "true"/"1"/1 → true; "false"/"0"/0 → false
 coerce(date()); // new Date(val)
 coerce(bigint()); // BigInt(val)
+coerce(decimal({ scale: 2 })); // string, bigint, or a safe integer
 
 // Compose freely
 optional(coerce(number())); // undefined | number
@@ -430,22 +431,87 @@ nullish(coerce(boolean())); // undefined | null | boolean
 
 `coerce()` preserves `METADATA` from the inner validator.
 
+### coerce() is not a no-op any more
+
+`coerce()` throws at construction for any validator that does not define a
+coerced form — `object`, `array`, `tuple`, `union`, `literal`, `uint8array`, and
+every custom validator. Only `string`, `number`, `boolean`, `date`, `bigint` and
+`decimal` are coercible.
+
+It used to return the validator unchanged. `coerce(object({ amount: number() }))`
+reads as though it coerces into the shape; it did nothing, and the strict
+`number()` inside rejected every form value — loud enough to catch in
+development. The quiet one was `coerce(union([number(), string()]))`: no
+coercion happened, the union still matched via its `string()` branch, so a value
+that should have become a number flowed on as a string while TypeScript saw
+`number | string` and was satisfied.
+
+The fix is to coerce the fields, not the composite:
+`object({ amount: coerce(number()) })`.
+
+### object({ unknownKeys })
+
+```ts
+object(shape, { unknownKeys?: 'strip' | 'error' | 'passthrough' })
+```
+
+- `'strip'` (default) — unchanged: keys the shape does not mention are dropped.
+- `'error'` — reject, naming them; `issues` gets one `{ path: [key] }` entry each.
+- `'passthrough'` — copy them onto the result unvalidated. They appear at
+  runtime but not in the inferred type: the shape never mentioned them, so
+  TypeScript has nothing to infer from. Cast, or declare them.
+
+The default path never walks the input's own keys, so `'strip'` costs nothing.
+
+Why `'error'` exists: on `PATCH /journal-entries/:id` with a partial schema,
+`{ "memmo": "audit correction" }` — a typo for `memo` — validates cleanly to
+`{}` under `'strip'`, the update changes nothing, and the API answers 200. The
+user believes the note was saved; there is no error, no log and no trace. For
+records with audit consequences, succeeding while doing nothing is worse than
+failing.
+
+Note that `object()` reads declared properties off whatever it is given,
+including class instances, so it does not assert "plain data object".
+
 ### Coercion Rules by Type
 
 | Type | Coerce behavior |
 |---|---|
 | `string` | `String(val)` |
-| `number` | `Number(val)` — empty string throws |
+| `number` | a `number`, or a `string` matching `/^[+-]?(\d+(\.\d*)?\|\.\d+)([eE][+-]?\d+)?$/` after trimming. Everything else throws — see below |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
 | `date` | `new Date(val)` — invalid dates throw |
 | `bigint` | `BigInt(val)` — floats and non-numeric strings throw |
+| `decimal` | a decimal `string`, a `bigint`, or a **safe integer** `number`; a fractional number throws |
+
+**`number` used to be `Number(val)`**, which inherits every JavaScript conversion
+quirk, on the path query strings and form data take — the least trusted input
+there is. What it accepted:
+
+| Input | Was | Now |
+|---|---|---|
+| `[]` | `0` | throws |
+| `[5]` | `5` | throws |
+| `true` | `1` | throws |
+| `'0x10'` | `16` | throws |
+| `'1e400'` | `Infinity` | throws |
+| `'  12  '` | `12` | `12` — whitespace is trimmed |
+| `'12abc'` | throws | throws |
+
+`[]` is the one that mattered. A query parser that yields an array for a
+repeated parameter (`?amount=&amount=`) produced `[]`, which became a silent
+`0` — a payment field that should have failed validation recorded as a zero
+payment. The transaction is created, debit still equals credit, and nothing
+reports an error: a class of bug found at bank reconciliation, not at request
+time.
 
 ---
 
 ## object(shape, options?)
 
-Validates an object, strips extra keys, throws on invalid input. Returns a new
-object with only the validated keys.
+Validates an object, throws on invalid input. Returns a new object with the
+validated keys; keys the shape does not mention are dropped by default — see
+`unknownKeys` above to reject or keep them instead.
 
 ```ts
 const schema = object({
@@ -722,9 +788,17 @@ objectAsync({
 
 ## Context (ctx) Forwarding
 
-Every validator accepts `(val, ctx?)`. The `ctx` argument is forwarded
-transparently through `object`, `array`, `tuple`, `optional`, `nullable`,
-`nullish`, `union`, `pipe`, and all Async variants.
+The `ctx` argument is forwarded transparently through the **compound**
+validators: `object`, `array`, `tuple`, `optional`, `nullable`, `nullish`,
+`union`, `pipe`, and all Async variants.
+
+The built-in **leaf** validators take one argument and ignore any context:
+`string`, `number`, `boolean`, `date`, `bigint`, `decimal`, `uint8array` and
+`literal` are all arity 1 (`literal('x').length === 1`). They have no children
+to forward to and no use for it. JavaScript ignores the extra argument, so
+passing one is harmless — it simply does nothing. Context is read by *your*
+validators, and `withContext()` makes a missing one a `VetaError` instead of a
+`TypeError`.
 
 ```ts
 // Leaf validator using ctx
@@ -830,6 +904,18 @@ try {
 | `name`    | `"VetaError"`            | Always `"VetaError"` — use for `err.name` checks    |
 | `message` | `string`                 | Human-readable error description                    |
 | `path`    | `(string \| number)[]`   | Structured traversal path to the failing field      |
+| `issues`  | `VetaIssue[]`            | Why a composite gave up; `[]` for a leaf failure    |
+
+`issues` is populated by `union()` (one entry per variant tried, each prefixed
+`Variant N:` and carrying that variant's own path), by `pipe()` when a custom
+message replaces the stage's error, and by `object({ unknownKeys: 'error' })`.
+Everything else leaves it empty.
+
+Before, `union()` caught its children with a bare `catch` and threw
+`'Value does not match any of the union types'` with an empty path and no cause.
+For a payment-method union, the support ticket said nothing about which variant
+came closest, which field was wrong, or that the problem was the card number —
+answering it meant reproducing with the user's payload.
 
 The `path` property tracks where the failure occurred in nested schemas:
 
