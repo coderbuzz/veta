@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@ba4a5ed -->
+<!-- docs: sync from coderbuzz/codex@d28b4e9 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -297,6 +297,63 @@ Use `coerce(bigint())` to cast strings and numbers via `BigInt(val)`. Float
 values like `1.5` throw even in coerce mode.
 
 **Options:** `min`, `max`, `message`, `requiredMessage` (same pattern as `number`)
+
+---
+
+### `decimal(options?)` — money
+
+```ts
+const amount = decimal({ precision: 18, scale: 2 });
+
+amount("1234.5");   // "1234.50" — padded, so equal amounts are equal strings
+amount("007.50");   // "7.50"    — leading zeros normalized
+amount("-0.00");    // "0.00"    — negative zero is zero
+amount("1234.567"); // throws    — 3 fraction digits, scale is 2
+amount(1234.5);     // throws    — a float64 cannot be trusted here
+amount(1234n);      // "1234.00" — bigint is exact, so it is accepted
+```
+
+Validates an exact fixed-scale decimal and returns a **normalized string**, never
+a `number`. This is the same representation `@coderbuzz/sql` infers for
+`DECIMAL`/`NUMERIC` columns, and the same one the `pg` and `mysql2` drivers
+already hand back — so a value crosses the HTTP/database boundary with no
+conversion step. Conversion steps are where precision is lost.
+
+`number()` cannot do this job:
+
+```ts
+number()(0.1 + 0.2);        // 0.30000000000000004
+number()(9007199254740993); // 9007199254740992 — silently
+```
+
+Summing float64 amounts also depends on the order they are added, so
+`total debit === total credit` can hold or fail for the same rows depending on
+how the query returned them. Do arithmetic in SQL (`SUM`, `*`, `ROUND` on
+`NUMERIC` are exact) or in a decimal library.
+
+**Options:**
+
+| Option            | Type                     | Description                                                     |
+| ----------------- | ------------------------ | --------------------------------------------------------------- |
+| `scale`           | `ValidationRule<number>` | Maximum fraction digits. Output is padded to exactly this many   |
+| `precision`       | `ValidationRule<number>` | Maximum total digits, as in `NUMERIC(precision, scale)`          |
+| `min`             | `ValidationRule<string>` | Inclusive minimum, written as a decimal string                   |
+| `max`             | `ValidationRule<string>` | Inclusive maximum, written as a decimal string                   |
+| `message`         | `string`                 | Fallback message for all validation errors                       |
+| `requiredMessage` | `string`                 | Message when value is `undefined` or `null`                      |
+
+A value with more fraction digits than `scale` is **rejected, not rounded** —
+silently dropping a digit of someone's money is the failure this validator
+exists to prevent. Bounds are compared exactly via scale-aligned `BigInt`, so
+they stay correct past 2^53-1.
+
+`coerce(decimal())` additionally accepts a `number`, but only a safe integer:
+anything fractional has already lost precision before the validator saw it, and
+turning it into a string would launder that into something that looks exact.
+
+There is deliberately no `money()` with a default scale — the right scale is a
+property of the currency (IDR is usually 0, most are 2, some are 3) and of the
+column you are writing to. Declare it.
 
 ---
 

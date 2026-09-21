@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@ba4a5ed -->
+<!-- docs: sync from coderbuzz/codex@d28b4e9 -->
 
 # VETA — AI Agent Knowledge File
 
@@ -128,6 +128,7 @@ import {
   boolean,
   coerce,
   date,
+  decimal,
   type InferAsyncEntry,
   type InferAsyncObject,
   type InferEntry,
@@ -273,6 +274,78 @@ coerce(bigint()); // BigInt(val) — "123" → 123n; floats (1.5) throw
 | `max` | `ValidationRule<bigint>` | Maximum value (inclusive) |
 | `message` | `string` | Fallback message |
 | `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
+### decimal(options?)
+
+The validator for money. Accepts a `string` or `bigint`, returns a **normalized
+string**, never a `number`.
+
+```ts
+decimal();                              // any decimal string
+decimal({ scale: 2 });                  // at most 2 fraction digits, padded to 2
+decimal({ precision: 18, scale: 2 });   // NUMERIC(18, 2)
+decimal({ scale: 2, min: '0.00' });     // non-negative amounts
+coerce(decimal({ scale: 2 }));          // additionally accepts safe integers
+```
+
+| Option | Type | Description |
+|---|---|---|
+| `scale` | `ValidationRule<number>` | Maximum fraction digits; output padded to exactly this many |
+| `precision` | `ValidationRule<number>` | Maximum total digits (integer + fraction) |
+| `min` | `ValidationRule<string>` | Inclusive minimum, as a decimal string |
+| `max` | `ValidationRule<string>` | Inclusive maximum, as a decimal string |
+| `message` | `string` | Fallback message |
+| `requiredMessage` | `string` | Message when value is `undefined` or `null` |
+
+**Accepted shape:** `/^-?\d+(\.\d+)?$/`. No exponent form, no thousands
+separator, no leading `+`, no bare `.5` or `5.`, and no `NaN`/`Infinity` — a
+column that stores money has no use for any of them.
+
+**Normalization**, so that two equal amounts are always the same string:
+
+| Input | `decimal()` | `decimal({ scale: 2 })` |
+|---|---|---|
+| `'007.50'` | `'7.50'` | `'7.50'` |
+| `'1234'` | `'1234'` | `'1234.00'` |
+| `'1234.5'` | `'1234.5'` | `'1234.50'` |
+| `'-0.00'` | `'-0.00'` → `'0.00'` | `'0.00'` |
+| `'1234.567'` | `'1234.567'` | throws |
+
+Without `scale` the fraction is left as written, so `'1.5'` and `'1.50'` stay
+different strings. Declare `scale` whenever you intend to compare or key on the
+value.
+
+**Rejected, not rounded.** More fraction digits than `scale` is an error. The
+caller had precision the column cannot store, and quietly discarding part of it
+is the failure the validator exists to prevent.
+
+**Bounds** are compared exactly, by aligning both scales and comparing as
+`BigInt` — so `decimal({ max: '9007199254740993' })` still rejects
+`'9007199254740994'`, which a float64 comparison would let through because both
+sides collapse to the same value.
+
+**Why not `number()`:** `0.1 + 0.2` is `0.30000000000000004`, `9007199254740993`
+becomes `9007199254740992`, and float addition is order-dependent — the same
+journal rows can sum to a different total depending on how the query ordered
+them, so `total debit === total credit` holds or fails unpredictably for large
+values. `min` does not catch it either, since the loss happens before validation.
+
+**Strict mode rejects `number` outright**, with a message that says why.
+`coerce(decimal())` accepts a `number` only when it is a safe integer
+(`Number.isSafeInteger`); a fractional or unsafe one is refused rather than
+stringified, because stringifying it would make a lost digit look exact.
+
+**Interop.** `@coderbuzz/sql` infers `SqlColumn<string>` for `DECIMAL`,
+`NUMERIC`, `BIGINT`, `BIGSERIAL` and MSSQL `MONEY`, and `pg`/`mysql2` return
+those columns as strings already. Using `decimal()` at the HTTP edge means the
+same representation end to end, with no conversion at the boundary. `METADATA`
+is `{ type: 'string' }`, so `@coderbuzz/proto` serializes it as a string.
+
+Arithmetic is not veta's job. Do it in SQL (`SUM`, `*`, `ROUND` on `NUMERIC` are
+exact) or in a decimal library, and pass values back as strings.
+
+**No `money()` alias**, deliberately: the right scale is a property of the
+currency (IDR is usually 0, most are 2, some are 3) and of the target column.
 
 ### uint8array(options?)
 
