@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@f1c7197 -->
+<!-- docs: sync from coderbuzz/codex@388339c -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
@@ -1079,6 +1079,34 @@ collector. Each contributes one issue rather than several.
 
 Calling a validator directly is completely unaffected — it throws on the first
 failure exactly as before.
+
+### Validators that need a context
+
+`ctx` is optional and `any` on every validator, so nothing tells you a validator
+needs one, and nothing fails when a caller forgets. `withContext` narrows that at
+the one place it matters:
+
+```ts
+import { withContext, string, VetaError } from "@coderbuzz/veta";
+
+type AppCtx = { tenantId: string };
+
+const accountCode = withContext<string, AppCtx>((val, ctx) => {
+  const code = string({ min: 1 })(val);
+  if (!accountsOf(ctx.tenantId).has(code)) throw new VetaError("Unknown account");
+  return code;
+});
+
+accountCode("1000");                       // throws VetaError: requires a context
+accountCode("1000", { tenantId: "acme" }); // "1000"
+```
+
+Without it, a forgotten context gives you `ctx.tenantId` throwing a `TypeError`
+— which is not a `VetaError`, so it slips past your validation error handler and
+becomes a 500 — or, if the validator was written defensively as `ctx?.tenantId`,
+a lookup against `undefined` that rejects everything, or accepts everything.
+
+Pass the context through the schema with `safeParse(schema, value, ctx)`.
 
 ---
 

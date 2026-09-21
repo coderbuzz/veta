@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@f1c7197 -->
+<!-- docs: sync from coderbuzz/codex@388339c -->
 
 # VETA — AI Agent Knowledge File
 
@@ -158,6 +158,7 @@ import {
   union,
   unionAsync,
   unknown,
+  withContext,
   VetaError,
   type ValidationRule,
 } from "@coderbuzz/veta";
@@ -922,6 +923,56 @@ value is not exposed, since half a journal entry is not something to act on.
 
 **Throwing is unchanged.** Calling a validator directly still stops at the first
 failure with the prefixed message and `VetaError.path`. `safeParse` is additive.
+
+## withContext — validators that need request-scoped data
+
+```ts
+withContext<T, C>(fn: (val: any, ctx: C) => T, options?: { message?: string }): (val: any, ctx?: C) => T
+type ContextualValidator<T, C> = (val: any, ctx?: C) => T
+```
+
+```ts
+type AppCtx = { tenantId: string };
+
+const accountCode = withContext<string, AppCtx>((val, ctx) => {
+  const code = string({ min: 1 })(val);
+  if (!accountsOf(ctx.tenantId).has(code)) throw new VetaError('Unknown account');
+  return code;
+});
+
+accountCode('1000');                        // VetaError: requires a context
+accountCode('1000', { tenantId: 'acme' });  // '1000'
+safeParse(schema, body, { tenantId: 'acme' });  // ctx reaches it through the schema
+```
+
+**The problem it bounds.** Every validator is `(val: any, ctx?: any)`. `ctx` is
+optional and `any`, so nothing tells a caller that a validator needs one and
+nothing fails when they forget. At runtime that becomes either `ctx.tenantId`
+throwing a `TypeError` — which is not a `VetaError`, so it escapes the
+validation error handler and surfaces as a 500 — or, for a validator written
+defensively as `ctx?.tenantId`, a lookup against `undefined`: every account
+rejected, or, depending on the implementation, every account accepted, which is
+a cross-tenant leak.
+
+`withContext` makes the third outcome impossible: no context, no validation. The
+failure is a `VetaError` with a path, so it lands in the same handler as every
+other validation failure.
+
+**What this is not.** `ctx` is still `any` across the rest of the library.
+Making it generic on `object<S, C>` and threading `C` through every validator
+signature was considered and not done: it touches every signature and every
+inference path, `InferObject` already carries a note about TS2589 recursion
+depth, and it would be a breaking change to type inference for existing schemas.
+`withContext` types the context where it is actually read, which is where
+getting it wrong costs something.
+
+**It is a leaf** for `safeParse`: it contributes one issue, like `union` and
+`pipe`.
+
+**Tenancy should not rest on this.** The audit's conclusion in section 2C holds:
+`ctx` is a convenience, not an enforcement boundary. Enforce tenant isolation in
+the database (row-level security via `SET LOCAL`), and treat a context-aware
+validator as a better error message, not as the control.
 
 ### Error Message Reference
 
