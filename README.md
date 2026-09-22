@@ -1,6 +1,6 @@
-<!-- docs: sync from coderbuzz/codex@7d74651 -->
+<!-- docs: sync from coderbuzz/codex@200be78 -->
 
-# Veta &mdash; `@coderbuzz/veta`
+# Veta: `@coderbuzz/veta`
 
 > Runtime-agnostic schema validation for TypeScript. Faster than Zod. Smaller than Yup. Type-safe where Joi isn't.
 > AI agents: see [AI_KNOWLEDGE.md](https://github.com/coderbuzz/veta/blob/main/AI_KNOWLEDGE.md) for expert context.
@@ -13,7 +13,7 @@
   <a href="https://codecov.io/gh/coderbuzz/veta"><img src="https://codecov.io/gh/coderbuzz/veta/graph/badge.svg" alt="Codecov" /></a>
 </p>
 
-**Veta** is a schema validation library built for TypeScript ergonomics: zero dependencies, full type inference, built-in coercion, sync and async pipelines, context forwarding, and schema metadata for serialization — in a single package that runs on **Bun, Deno, and Node.js**.
+**Veta** is a schema validation library built for TypeScript ergonomics: zero dependencies, full type inference, built-in coercion, sync and async pipelines, context forwarding, and schema metadata for serialization, in a single package that runs on **Bun, Deno, and Node.js**.
 
 ---
 
@@ -22,11 +22,11 @@
 | Pain Point | Zod | Yup | Joi | **Veta** |
 |---|---|---|---|---|
 | Nested object syntax | Must wrap every level with `z.object()` | Same | Same | **Shorthand**: plain objects auto-detect |
-| Type coercion | `z.coerce.xxx()` or custom transforms | `.cast()` only | Separate module | **Built-in `coerce()`** — one function |
+| Type coercion | `z.coerce.xxx()` or custom transforms | `.cast()` only | Separate module | **Built-in `coerce()`**, one function |
 | Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
 | Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
-| Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol** — use for codecs/serialization |
-| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip** — zero deps |
+| Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol**: use for codecs/serialization |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip**, zero deps |
 
 Veta matches **Zod's type inference quality** at under 5 KB gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
@@ -34,15 +34,15 @@ Veta matches **Zod's type inference quality** at under 5 KB gzip (vs. Zod's ~35 
 
 ## Highlights
 
-- **Object shorthand syntax** — write `{ tags: [string()] }` instead of `{ tags: array(string()) }`
-- **`.map()` on objects** — remap keys, extract deep paths, transform before validation
-- **Built-in coercion** — `coerce(number())` accepts `"42"` → `42` from any source (form data, env vars, query params)
-- **Sync + Async APIs** — `objectAsync` / `arrayAsync` / `tupleAsync` / `unionAsync` / `pipeAsync` with the same mental model
-- **Context forwarding** — pass request-scoped data (SSP identifiers, auth, tenant IDs) through every validator
-- **Schema metadata** — `METADATA` symbol for encoding layers like `@coderbuzz/proto`
-- **Custom error messages** — per-validator or per-rule via `ValidationRule<T>`
-- **Zero dependencies** — no runtime overhead, no `zod` baggage
-- **Runtime agnostic** — Bun, Deno, Node.js, browsers (any ES2022 runtime)
+- **Object shorthand syntax**: write `{ tags: [string()] }` instead of `{ tags: array(string()) }`
+- **`.map()` on objects**: remap keys, extract deep paths, transform before validation
+- **Built-in coercion**: `coerce(number())` accepts `"42"` → `42` from any source (form data, env vars, query params)
+- **Sync + Async APIs**: `objectAsync` / `arrayAsync` / `tupleAsync` / `unionAsync` / `pipeAsync` with the same mental model
+- **Context forwarding**: pass request-scoped data (SSP identifiers, auth, tenant IDs) through every validator
+- **Schema metadata**: `METADATA` symbol for encoding layers like `@coderbuzz/proto`
+- **Custom error messages**: per-validator or per-rule via `ValidationRule<T>`
+- **Zero dependencies**: no runtime overhead, no `zod` baggage
+- **Runtime agnostic**: Bun, Deno, Node.js, browsers (any ES2022 runtime)
 
 ---
 
@@ -102,7 +102,7 @@ const user = createUser({
   name: "John Doe",
   email: "john@example.com",
   tags: ["admin", "owner"],
-  extra: "ignored", // stripped — only validated keys are returned
+  extra: "ignored", // stripped, only validated keys are returned
 });
 // { id: 42, name: "John Doe", email: "john@example.com", tags: ["admin", "owner"] }
 ```
@@ -116,7 +116,7 @@ Every example in this doc works with **zero modification** across Bun, Deno, and
 ### Veta vs Zod: Nested Schema
 
 ```ts
-// Zod — every level needs wrapping
+// Zod: every level needs wrapping
 import { z } from "zod";
 const zodSchema = z.object({
   user: z.object({
@@ -127,7 +127,7 @@ const zodSchema = z.object({
   }),
 });
 
-// Veta — shorthand auto-detects nested objects and arrays
+// Veta: shorthand auto-detects nested objects and arrays
 import { object, string } from "@coderbuzz/veta";
 const vetaSchema = object({
   user: {
@@ -142,13 +142,13 @@ const vetaSchema = object({
 ### Veta vs Zod: Coercion
 
 ```ts
-// Zod — separate API surface
+// Zod: separate API surface
 const zCoerce = z.object({
   id: z.coerce.number(),
   active: z.coerce.boolean(),
 });
 
-// Veta — one function, consistent
+// Veta: one function, consistent
 const vCoerce = object({
   id: coerce(number()),
   active: coerce(boolean()),
@@ -158,10 +158,10 @@ const vCoerce = object({
 ### Veta vs Zod: Async Validation
 
 ```ts
-// Zod — no built-in async object validation
+// Zod: no built-in async object validation
 // You must manually await each field with Promise.all
 
-// Veta — declarative async API
+// Veta: declarative async API
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
@@ -203,12 +203,12 @@ v(123); // throws "Invalid string: expected string, got number"
 | `message`         | `string`                 | Fallback message for all validation errors  |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null` |
 
-Strict by default — only accepts `string` values. Use `coerce(string())` to cast
+Strict by default. Only accepts `string` values. Use `coerce(string())` to cast
 any value via `String(val)`.
 
 **`pattern` must not be sticky, and `/g` is ignored.** `.test()` on a `/g` or
 `/y` regex advances `lastIndex` on the regex object, which the validator holds
-for its whole lifetime — the same input would then pass and fail on alternate
+for its whole lifetime. The same input would then pass and fail on alternate
 calls, across requests. A `/g` flag is dropped when the validator is built
 (other flags are kept); a `/y` flag throws, because it also changes what the
 pattern matches.
@@ -235,21 +235,21 @@ v(Infinity); // throws "Invalid number: expected a finite number, got Infinity"
 | `message`         | `string`                 | Fallback message for all validation errors  |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null` |
 
-Strict by default — only accepts finite numbers: `NaN`, `Infinity` and
+Strict by default. Only accepts finite numbers: `NaN`, `Infinity` and
 `-Infinity` are all rejected, in coerce mode too. This matters for amounts,
 because `min` alone does not stop infinity (`Infinity >= 0`) and
-`JSON.parse('{"amount":1e400}')` yields `Infinity` without any error — so it can
+`JSON.parse('{"amount":1e400}')` yields `Infinity` without any error, so it can
 arrive straight from a request body and turn a balance into `NaN`.
 
 `coerce(number())` accepts a `number`, or a `string` in plain decimal notation
 (optional sign, digits, optional fraction, optional exponent; surrounding
-whitespace is trimmed). Everything else is rejected — including `true`, `[]`,
+whitespace is trimmed). Everything else is rejected, including `true`, `[]`,
 `{}`, `'0x10'` and `'1e400'`.
 
 It used to be `Number(val)`, which inherits every JavaScript conversion quirk,
 on the path query strings and form data take. `[]` was the dangerous one: a query
 parser that yields an array for a repeated parameter (`?amount=&amount=`) gave
-`[]`, which became a silent `0` — a payment field that should have failed
+`[]`, which became a silent `0`: a payment field that should have failed
 validation recorded as a zero payment, found at bank reconciliation rather than
 at request time.
 
@@ -305,41 +305,41 @@ v("123"); // throws "Invalid bigint: expected bigint, got string"
 Use `coerce(bigint())` to cast strings and numbers via `BigInt(val)`. Float
 values like `1.5` throw even in coerce mode.
 
-**`coerce()` only wraps the primitives that define a coerced form** — `string`,
+**`coerce()` only wraps the primitives that define a coerced form**: `string`,
 `number`, `boolean`, `date`, `bigint`, `decimal`. Anything else throws where you
 write it. It used to return the validator unchanged, so
 `coerce(object({ amount: number() }))` looked like it coerced into the shape and
-did nothing at all — the strict `number()` inside then rejected every form value.
+did nothing at all. The strict `number()` inside then rejected every form value.
 Apply it to the fields instead: `object({ amount: coerce(number()) })`.
 
 **Options:** `min`, `max`, `message`, `requiredMessage` (same pattern as `number`)
 
 ---
 
-### `decimal(options?)` — money
+### `decimal(options?)`: money
 
 ```ts
 const amount = decimal({ precision: 18, scale: 2 });
 
-amount("1234.5");   // "1234.50" — padded, so equal amounts are equal strings
-amount("007.50");   // "7.50"    — leading zeros normalized
-amount("-0.00");    // "0.00"    — negative zero is zero
-amount("1234.567"); // throws    — 3 fraction digits, scale is 2
-amount(1234.5);     // throws    — a float64 cannot be trusted here
-amount(1234n);      // "1234.00" — bigint is exact, so it is accepted
+amount("1234.5");   // "1234.50", padded, so equal amounts are equal strings
+amount("007.50");   // "7.50", leading zeros normalized
+amount("-0.00");    // "0.00", negative zero is zero
+amount("1234.567"); // throws, 3 fraction digits, scale is 2
+amount(1234.5);     // throws, a float64 cannot be trusted here
+amount(1234n);      // "1234.00", bigint is exact, so it is accepted
 ```
 
 Validates an exact fixed-scale decimal and returns a **normalized string**, never
 a `number`. This is the same representation `@coderbuzz/sql` infers for
 `DECIMAL`/`NUMERIC` columns, and the same one the `pg` and `mysql2` drivers
-already hand back — so a value crosses the HTTP/database boundary with no
+already hand back, so a value crosses the HTTP/database boundary with no
 conversion step. Conversion steps are where precision is lost.
 
 `number()` cannot do this job:
 
 ```ts
 number()(0.1 + 0.2);        // 0.30000000000000004
-number()(9007199254740993); // 9007199254740992 — silently
+number()(9007199254740993); // 9007199254740992, silently
 ```
 
 Summing float64 amounts also depends on the order they are added, so
@@ -358,7 +358,7 @@ how the query returned them. Do arithmetic in SQL (`SUM`, `*`, `ROUND` on
 | `message`         | `string`                 | Fallback message for all validation errors                       |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null`                      |
 
-A value with more fraction digits than `scale` is **rejected, not rounded** —
+A value with more fraction digits than `scale` is **rejected, not rounded**:
 silently dropping a digit of someone's money is the failure this validator
 exists to prevent. Bounds are compared exactly via scale-aligned `BigInt`, so
 they stay correct past 2^53-1.
@@ -367,7 +367,7 @@ they stay correct past 2^53-1.
 anything fractional has already lost precision before the validator saw it, and
 turning it into a string would launder that into something that looks exact.
 
-There is deliberately no `money()` with a default scale — the right scale is a
+There is deliberately no `money()` with a default scale. The right scale is a
 property of the currency (IDR is usually 0, most are 2, some are 3) and of the
 column you are writing to. Declare it.
 
@@ -390,7 +390,7 @@ v([1, 2, 3]); // throws "Invalid Uint8Array"
 
 ### `any()` and `unknown()`
 
-Passthrough validators — accept and return any value without modification.
+Passthrough validators: accept and return any value without modification.
 
 ```ts
 const v1 = any();
@@ -434,10 +434,10 @@ Each constraint option accepts either a plain value **or** a
 `{ value, message }` object for a rule-specific message:
 
 ```ts
-// Plain value — uses default message
+// Plain value: uses default message
 string({ min: 10 });
 
-// ValidationRule — custom message for this rule only
+// ValidationRule: custom message for this rule only
 string({
   min: { value: 10, message: "Username must be at least 10 characters" },
   pattern: {
@@ -479,10 +479,10 @@ Coercion rules by type:
 | Type      | Coerce behavior                                                           |
 | --------- | ------------------------------------------------------------------------- |
 | `string`  | `String(val)`                                                             |
-| `number`  | `Number(val)` — empty string throws                                       |
+| `number`  | `Number(val)`, empty string throws                                       |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
-| `date`    | `new Date(val)` — invalid dates throw                                     |
-| `bigint`  | `BigInt(val)` — floats and non-numeric strings throw                      |
+| `date`    | `new Date(val)`, invalid dates throw                                     |
+| `bigint`  | `BigInt(val)`, floats and non-numeric strings throw                      |
 
 `coerce()` composes with all wrappers:
 
@@ -536,7 +536,7 @@ single-element arrays, and multi-element arrays directly in the shape:
 { items: [{ id: number(), name: string() }] } → { items: array(object({ id: number(), name: string() })) }
 ```
 
-The shorthand works recursively and is zero-overhead — normalization happens
+The shorthand works recursively and is zero-overhead: normalization happens
 once at schema construction time.
 
 ```ts
@@ -643,7 +643,7 @@ v("hello"); // "hello" (string wins)
 v(true); // throws "Value does not match any of the union types"
 ```
 
-Order matters — the first matching validator wins:
+Order matters, the first matching validator wins:
 
 ```ts
 union([coerce(string()), coerce(number())]); // everything becomes string
@@ -775,7 +775,7 @@ const account = await createAccount({
 });
 ```
 
-Concurrent execution — slow and fast async validators run in parallel:
+Concurrent execution, slow and fast async validators run in parallel:
 
 ```ts
 const schema = objectAsync({ a: slowValidator, b: fastValidator });
@@ -796,7 +796,7 @@ const enrich = async (id: any) => {
 };
 
 const v = arrayAsync(enrich, { min: 1, max: 50 });
-await v(["1", "2", "3"]); // concurrent — all IDs fetched in parallel
+await v(["1", "2", "3"]); // concurrent, all IDs fetched in parallel
 ```
 
 ---
@@ -883,8 +883,8 @@ Context is forwarded through the **compound** validators: `object`, `array`,
 `tuple`, `union`, `pipe`, `optional`, `nullable`, `nullish`, `objectAsync`,
 `arrayAsync`, `tupleAsync`, `unionAsync`, `pipeAsync`.
 
-The built-in **leaf** validators — `string`, `number`, `boolean`, `date`,
-`bigint`, `decimal`, `uint8array`, `literal` — take one argument and ignore any
+The built-in **leaf** validators (`string`, `number`, `boolean`, `date`,
+`bigint`, `decimal`, `uint8array`, `literal`) take one argument and ignore any
 context passed to them. They have no children to forward it to and no use for it
 themselves. Your own validators are where context is read; `withContext()` makes
 a missing one a clear failure rather than a `TypeError`.
@@ -924,7 +924,7 @@ Additional utility types:
 | `InferAsyncObject<S>` | Infers the output type of an async object shape (unwraps `Promise`) |
 | `InferEntry<T>`       | Infers the output type of a single shape entry                      |
 | `InferAsyncEntry<T>`  | Infers the async output type of a single shape entry                |
-| `ValidationRule<T>`   | `T \| { value: T; message: string }` — for custom per-rule messages |
+| `ValidationRule<T>`   | `T \| { value: T; message: string }`, for custom per-rule messages |
 | `TypeMeta`            | Discriminated union describing the shape of a validator             |
 
 ```ts
@@ -1020,7 +1020,7 @@ Notes:
 ## Error Reference
 
 All validators throw `VetaError` (exported from `@coderbuzz/veta`) when validation fails.
-`VetaError` extends `Error` — use `err instanceof VetaError` to distinguish validation
+`VetaError` extends `Error`. Use `err instanceof VetaError` to distinguish validation
 failures from other runtime errors.
 
 ```ts
@@ -1031,7 +1031,7 @@ try {
 } catch (err) {
   if (err instanceof VetaError) {
     console.log(err.message); // "String too short (min: 3)"
-    console.log(err.path);    // [] — structured path to the failing field
+    console.log(err.path);    // [], structured path to the failing field
   }
 }
 ```
@@ -1062,7 +1062,7 @@ Property "departments": Item at index 0: Property "manager": Invalid email
 ### Collecting every error
 
 Throwing stops at the first bad field. That is right for a hot path and wrong
-for a form — the user fixes one field, submits, and is told about the next one.
+for a form: the user fixes one field, submits, and is told about the next one.
 `safeParse` returns all of them:
 
 ```ts
@@ -1090,7 +1090,7 @@ if (!result.ok) {
 `safeParseAsync` is the counterpart for `objectAsync`/`arrayAsync`/`tupleAsync`
 schemas.
 
-Each issue's `message` is the leaf validator's own — without the
+Each issue's `message` is the leaf validator's own, without the
 `Property "x": Item at index 2:` prefixes the throwing form builds, since `path`
 already says where it happened and a form wants the two separately.
 
@@ -1099,7 +1099,7 @@ single child to attribute a failure to, a pipe stage cannot run on a value the
 previous stage rejected, and a custom validator does not know about the
 collector. Each contributes one issue rather than several.
 
-Calling a validator directly is completely unaffected — it throws on the first
+Calling a validator directly is completely unaffected. It throws on the first
 failure exactly as before.
 
 ### Why a union or pipe rejected a value
@@ -1120,7 +1120,7 @@ try {
 ```
 
 Without it, a failed union said only "Value does not match any of the union
-types" — not which variant came closest, not which field was wrong, not even
+types": not which variant came closest, not which field was wrong, not even
 that the problem was the card number. Answering that support ticket meant
 reproducing it with the user's payload.
 
@@ -1135,12 +1135,12 @@ const patch = object({ memo: optional(string()) }, { unknownKeys: "error" });
 patch({ memmo: "audit correction" });  // throws: Unknown key: "memmo"
 ```
 
-`unknownKeys` is `'strip'` by default — unchanged behaviour, keys the shape does
+`unknownKeys` is `'strip'` by default: unchanged behaviour, keys the shape does
 not mention are dropped. `'error'` rejects them, `'passthrough'` copies them onto
 the result unvalidated.
 
 `'error'` is worth reaching for on a partial-update endpoint. With `'strip'`, a
-`PATCH` body of `{ "memmo": "audit correction" }` — a typo for `memo` — validates
+`PATCH` body of `{ "memmo": "audit correction" }` (a typo for `memo`) validates
 cleanly to `{}`, the update changes nothing, and the API answers 200. The user
 believes the note was saved. For records with audit consequences, succeeding
 while doing nothing is worse than failing.
@@ -1166,9 +1166,9 @@ accountCode("1000");                       // throws VetaError: requires a conte
 accountCode("1000", { tenantId: "acme" }); // "1000"
 ```
 
-Without it, a forgotten context gives you `ctx.tenantId` throwing a `TypeError`
-— which is not a `VetaError`, so it slips past your validation error handler and
-becomes a 500 — or, if the validator was written defensively as `ctx?.tenantId`,
+Without it, a forgotten context gives you `ctx.tenantId` throwing a `TypeError`,
+which is not a `VetaError`, so it slips past your validation error handler and
+becomes a 500; or, if the validator was written defensively as `ctx?.tenantId`,
 a lookup against `undefined` that rejects everything, or accepts everything.
 
 Pass the context through the schema with `safeParse(schema, value, ctx)`.
@@ -1207,9 +1207,9 @@ const userSchema = object({
   email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
   role: union([literal("admin"), literal("editor"), literal("viewer")]),
   birthDate: nullable(coerce(date())),
-  address: optional(addressShape), // shorthand — no object() needed
-  tags: optional([string()]), // shorthand — no array() needed
-  scores: [coerce(number())], // shorthand — always required
+  address: optional(addressShape), // shorthand, no object() needed
+  tags: optional([string()]), // shorthand, no array() needed
+  scores: [coerce(number())], // shorthand, always required
 });
 
 // ── Inferred type ─────────────────────────────────────────────
@@ -1267,10 +1267,10 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `z.infer<typeof S>` | `InferObject<typeof S>` |
 
 **Key behavioral differences:**
-1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`) — this is by design for tree-shaking and TypeScript performance
+1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`), by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
-3. Veta **strips unknown keys** by default (like Zod's `.strip()`) — there's no `.passthrough()` equivalent
-4. Veta **throws `VetaError` on invalid input**. Use `safeParse(schema, val)` when you want every failure at once instead — see [Collecting every error](#collecting-every-error)
+3. Veta **strips unknown keys** by default (like Zod's `.strip()`). There's no `.passthrough()` equivalent
+4. Veta **throws `VetaError` on invalid input**. Use `safeParse(schema, val)` when you want every failure at once instead. See [Collecting every error](#collecting-every-error)
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
 ---
