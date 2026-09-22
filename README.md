@@ -1,8 +1,8 @@
-<!-- docs: sync from coderbuzz/codex@5fc23c4 -->
+<!-- docs: sync from coderbuzz/codex@7d74651 -->
 
 # Veta &mdash; `@coderbuzz/veta`
 
-> Runtime-agnostic schema validation for TypeScript. Faster than Zod. Smaller than Yup. Smarter than Joi.
+> Runtime-agnostic schema validation for TypeScript. Faster than Zod. Smaller than Yup. Type-safe where Joi isn't.
 > AI agents: see [AI_KNOWLEDGE.md](https://github.com/coderbuzz/veta/blob/main/AI_KNOWLEDGE.md) for expert context.
 <p align="center">
   <a href="https://www.npmjs.com/package/@coderbuzz/veta"><img src="https://img.shields.io/npm/v/@coderbuzz/veta.svg?style=flat-square" alt="npm version" /></a>
@@ -13,7 +13,7 @@
   <a href="https://codecov.io/gh/coderbuzz/veta"><img src="https://codecov.io/gh/coderbuzz/veta/graph/badge.svg" alt="Codecov" /></a>
 </p>
 
-**Veta** is a next-generation schema validation library designed from the ground up for TypeScript ergonomics. Zero dependencies. Full type inference. Built-in coercion. Sync _and_ async pipelines. Context forwarding. Schema metadata for serialization. All in a single, lightweight package that runs on **Bun, Deno, and Node.js**.
+**Veta** is a schema validation library built for TypeScript ergonomics: zero dependencies, full type inference, built-in coercion, sync and async pipelines, context forwarding, and schema metadata for serialization — in a single package that runs on **Bun, Deno, and Node.js**.
 
 ---
 
@@ -28,7 +28,7 @@
 | Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol** — use for codecs/serialization |
 | Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip** — zero deps |
 
-Veta matches **Zod's type inference quality** while being significantly lighter and adding features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
+Veta matches **Zod's type inference quality** at under 5 KB gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
 ---
 
