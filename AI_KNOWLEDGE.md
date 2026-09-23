@@ -1,8 +1,8 @@
-<!-- docs: sync from coderbuzz/codex@200be78 -->
+<!-- docs: sync from coderbuzz/codex@b37bd48 -->
 
 # VETA: AI Agent Knowledge File
 
-**Package:** `@coderbuzz/veta` v0.1.3\
+**Package:** `@coderbuzz/veta` (no runtime dependencies)\
 **Purpose:** Runtime-agnostic TypeScript schema validation library.\
 **Distribution:** ESM only (`dist/index.js` + `dist/index.d.ts`). No source
 `.ts` files in the package.
@@ -14,7 +14,8 @@
 `veta` validators are **plain functions** with the signature
 `(val: any, ctx?: any) => T`. They throw `VetaError` on invalid input and return the
 validated value on success. Every function exported from `@coderbuzz/veta` either
-**creates** a validator function or **wraps** one.
+**creates** a validator function or **wraps** one, except `safeParse` /
+`safeParseAsync`, which run one.
 
 ```
 validator = (val: any, ctx?: any) => T    // throws on invalid, returns T on valid
@@ -31,7 +32,7 @@ validator = (val: any, ctx?: any) => T    // throws on invalid, returns T on val
 | Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
 | Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
 | Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol**: use for codecs/serialization |
-| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip**, zero deps |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~5.4 KB min+gzip**, zero deps |
 
 Veta matches Zod's type inference quality while being significantly lighter and adding features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
@@ -97,9 +98,9 @@ const vCoerce = object({
 ### Veta vs Zod: Async Validation
 
 ```ts
-// Zod: no built-in async object validation; manual Promise.all required
+// Zod: async checks go through `.refine(async ...)` and require `parseAsync()`
 
-// Veta: declarative async API with concurrent execution
+// Veta: a field validator is itself the async function, fields run concurrently
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
@@ -161,7 +162,21 @@ import {
   withContext,
   VetaError,
   type ValidationRule,
+  // Other exported types
+  type VetaIssue,
+  type SafeParseResult,
+  type ContextualValidator,
+  type DecimalOptions,
+  type ObjectOptions,
+  type ObjectValidator,
 } from "@coderbuzz/veta";
+```
+
+Not exported: the per-primitive option types (`StringOptions`, `NumberOptions`,
+`BooleanOptions`, `DateOptions`, `BigIntOptions`), `ContainsUndefined`, and the
+internal `COERCE` symbol (`Symbol.for('coderbuzz.veta.coerce')`).
+
+```ts
 ```
 
 ---
@@ -268,7 +283,7 @@ coerce(date()); // new Date(val), parses ISO strings, timestamps
 bigint(); // strict: only bigint
 bigint({ min: 0n });
 bigint({ max: 9999n });
-coerce(bigint()); // BigInt(val), "123" → 123n; floats (1.5) throw
+coerce(bigint()); // BigInt(val), "123" → 123n; floats (1.5) throw; ""/[] → 0n, true → 1n
 ```
 
 | Option | Type | Description |
@@ -481,7 +496,7 @@ including class instances, so it does not assert "plain data object".
 | `number` | a `number`, or a `string` matching `/^[+-]?(\d+(\.\d*)?\|\.\d+)([eE][+-]?\d+)?$/` after trimming. Everything else throws, see below |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
 | `date` | `new Date(val)`, invalid dates throw |
-| `bigint` | `BigInt(val)`, floats and non-numeric strings throw |
+| `bigint` | `BigInt(val)`, floats and non-numeric strings throw. Inherits `BigInt()` quirks: `""`, `" "` and `[]` → `0n`, `true` → `1n`, `"0x10"` → `16n` |
 | `decimal` | a decimal `string`, a `bigint`, or a **safe integer** `number`; a fractional number throws |
 
 **`number` used to be `Number(val)`**, which inherits every JavaScript conversion
@@ -584,6 +599,10 @@ schema({ name: "John", userAge: "30", profile: { role: "admin" } });
 | `string` | Read from `input[altKey]` |
 | `function` | Call `mapFn(input)` and pass result to validator |
 | _(omitted)_ | Read from `input[key]` as normal |
+
+**`.map()` limits:** the returned validator ignores the `unknownKeys` option of
+the `object()` it came from (extra keys are always stripped), and it has no
+`METADATA`, so `@coderbuzz/proto` cannot compile it.
 
 `.map()` supports nesting and works alongside `optional`, `nullable`, `nullish`, `array`, and `union`:
 
@@ -716,10 +735,14 @@ are still pending, the container rejects with the sync error. `Promise.all` is
 never reached. The pending children are given a no-op rejection handler first,
 so a child that also fails does not surface as an unhandled rejection (which
 Node terminates the process for by default, and which would carry no request or
-tenant context in the log). Only the first sync failure is reported; there is no
-collect-all mode yet, so a payload with several problems still yields one error.
+tenant context in the log). Only the first sync failure is reported when the validator is called directly;
+use `safeParseAsync` to collect every failure.
 
 ### objectAsync
+
+Options: `{ message?, requiredMessage? }` only. There is no `unknownKeys`: extra
+keys are always stripped. No `METADATA` is attached (true of every async
+variant).
 
 ```ts
 const schema = objectAsync({
@@ -841,6 +864,20 @@ type T3 = Awaited<ReturnType<typeof asyncSchema>>;
 Optional properties (those that can be `undefined`) are made optional (`?`) in
 the inferred type automatically.
 
+| Type | Description |
+|---|---|
+| `InferObject<S>` | Output type of a sync object **shape** (not of an `object()` validator) |
+| `InferAsyncObject<S>` | Output type of an async object shape (unwraps `Promise`) |
+| `InferEntry<T>` | Output type of one shape entry: a validator instance, plain object, `[v]` or `[v1, v2]` |
+| `InferAsyncEntry<T>` | Async counterpart of `InferEntry` |
+| `ValidationRule<T>` | `T \| { value: T; message: string }` |
+| `TypeMeta` | Discriminated union describing a validator's shape |
+
+Pass validator **instances**, not factories: `InferEntry<typeof tag>` with
+`const tag = string()` is `string`; `InferEntry<typeof string>` is the validator
+function type. Passing an `object()` validator to `InferObject` gives a wrong
+type too; use `ReturnType<typeof schema>`.
+
 ---
 
 ## METADATA Symbol
@@ -851,8 +888,9 @@ import { METADATA, type TypeMeta } from "@coderbuzz/veta";
 const meta = (validator as any)[METADATA] as TypeMeta | undefined;
 ```
 
-All primitive validators and composition helpers attach `TypeMeta` to the
-validator function under `METADATA = Symbol.for("ken.metadata")`.
+All sync primitive validators and composition helpers attach `TypeMeta` to the
+validator function under `METADATA = Symbol.for("coderbuzz.veta.metadata")`.
+The async variants, `withContext()` and `object().map()` attach none.
 
 ```ts
 (string() as any)[METADATA] // { type: "string" }
@@ -872,10 +910,17 @@ validator function under `METADATA = Symbol.for("ken.metadata")`.
 (union([string(), number()]) as any)[METADATA] // { type: "union", variants: [...] }
 (object({ id: number() }) as any)[METADATA] // { type: "object", shape: { id: { type: "number" } } }
 (coerce(number()) as any)[METADATA]; // { type: "number" }, preserved
+(decimal() as any)[METADATA] // { type: "string" }
 ```
 
 Custom function validators have no `METADATA`. `pipe()` inherits from the last
 validator in the chain.
+
+**Missing child metadata:** `array`, `optional`, `nullable`, `nullish` get no
+`METADATA` if the inner validator has none; `tuple` and `union` get none unless
+every child has it. `object()` always gets `METADATA`, but its `shape` silently
+omits fields whose validator has none, so a proto codec built from it drops
+those fields from the wire.
 
 ---
 
@@ -1066,7 +1111,14 @@ validator as a better error message, not as the control.
 | --------------------- | ------------------------------------------------- |
 | `null` / `undefined`  | `"Required"`                                      |
 | Wrong primitive type  | `"Invalid string: expected string, got number"`   |
-| `NaN`                 | `"Invalid number: expected number, got number"`   |
+| `NaN` / `Infinity`    | `"Invalid number: expected a finite number, got NaN"` |
+| Coerced number text   | `"Invalid number: \"0x10\""`                        |
+| Decimal shape         | `"Invalid decimal: \"1e5\" is not a decimal number"` |
+| Decimal scale         | `"Too many fraction digits (max: N)"`             |
+| Decimal precision     | `"Too many digits (max: N)"`                      |
+| Decimal bounds        | `"Decimal too small (min: X)"` / `"Decimal too large (max: X)"` |
+| Unknown keys          | `"Unknown key: \"k\""` / `"Unknown keys: \"a\", \"b\""` |
+| `withContext` no ctx  | `"This validator requires a context, and none was passed. ..."` |
 | String too short      | `"String too short (min: N)"`                     |
 | String too long       | `"String too long (max: N)"`                      |
 | Pattern mismatch      | `"String does not match pattern: /regex/"`        |
@@ -1160,7 +1212,7 @@ const Role = union([
 ```ts
 const adResponse = object({
   id: string(),
-  ad: nullable({
+  ad: nullable(object({ // nullable() needs a validator; shorthand works only inside a shape
     id: string(),
     creative: {
       url: string(),
@@ -1175,7 +1227,7 @@ const adResponse = object({
         url: string(),
       }],
     },
-  }),
+  })),
 });
 ```
 
@@ -1252,12 +1304,12 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
 | `.safeParse()` | `safeParse(schema, val)` |
-| `z.infer<typeof S>` | `InferObject<typeof S>` |
+| `z.infer<typeof S>` | `ReturnType<typeof schema>`, or `InferObject<typeof shape>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`), by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
-3. Veta **strips unknown keys** by default (like Zod's `.strip()`). There's no `.passthrough()` equivalent
+3. Veta **strips unknown keys** by default (like Zod's `.strip()`). Use `object(shape, { unknownKeys: 'passthrough' })` or `'error'` for Zod's `.passthrough()` / `.strict()`
 4. Veta **throws `VetaError` on invalid input**; `safeParse(schema, val)` returns `{ ok, value | issues }` with every failure instead
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
@@ -1283,12 +1335,12 @@ const userSchema = object({
   email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
   role: union([literal("admin"), literal("editor"), literal("viewer")]),
   birthDate: nullable(coerce(date())),
-  address: optional(addressShape),       // shorthand, no object() needed
-  tags: optional([string()]),            // shorthand, no array() needed
+  address: optional(object(addressShape)), // optional() needs a validator, not a shape
+  tags: optional(array(string())),
   scores: [coerce(number())],            // shorthand, always required
 });
 
-type User = InferObject<typeof userSchema>;
+type User = ReturnType<typeof userSchema>; // InferObject takes a shape, not a validator
 
 const user = userSchema({
   id: "42",
@@ -1317,8 +1369,9 @@ const user = userSchema({
    will always return a string because `coerce(string())` accepts everything.
 4. **`coerce(number())` rejects empty strings**: `""` → "Invalid number".
 5. **`coerce(bigint())` rejects floats**: `1.5` → "Invalid bigint".
-6. **Object validators strip extra keys**: only declared shape keys are
-   returned.
+6. **Object validators strip extra keys** by default: only declared shape keys are
+   returned, unless `unknownKeys: 'error' | 'passthrough'` is set.
+   `objectAsync` and `.map()` always strip.
 7. **`pipe()` metadata = last validator's metadata**: a custom function as the
    last step means no metadata.
 8. **Shorthand tuple requires `as const`** for accurate TypeScript inference:
@@ -1330,9 +1383,15 @@ const user = userSchema({
 11. **`Buffer` passes `uint8array()`**: `Buffer extends Uint8Array`, so Node.js
     Buffer instances are accepted.
 12. **Custom function validators have no METADATA** and no COERCE symbol:
-    `coerce()` is a no-op on them.
+    `coerce()` throws on them at construction.
 13. **`.map()` is evaluated at call time on the whole object**: the mapping
     function receives the full input object, not the individual property value.
+14. **Shorthand is only read inside a shape**: `optional({ a: string() })`,
+    `nullable([string()])` and similar pass a non-function to the wrapper and
+    throw `TypeError: validator is not a function` on the first call. Wrap with
+    `object()` / `array()` first.
+15. **`coerce(bigint())` inherits `BigInt()` quirks**: `""` and `[]` become `0n`,
+    `true` becomes `1n`. `coerce(number())` rejects all three.
 
 ---
 
@@ -1373,7 +1432,8 @@ object({ a: validatorA, b: validatorB })(input, ctx)
   ├─ Check: is input an object? → else throw "Invalid object"
   ├─ For each declared key:
   │   └─ validator(input[key], ctx) → store result
-  └─ Return new object with only validated keys (extra keys stripped)
+  └─ Return new object with only validated keys (extra keys stripped,
+     unless unknownKeys is 'error' or 'passthrough')
 ```
 
 Errors from nested properties include the key name: `Property "key": <inner message>`.
@@ -1426,6 +1486,12 @@ All composition helpers (`optional`, `nullable`, `nullish`, `array`, `tuple`, `u
 | `optional(validator)` | `{ type: "optional", inner: <metadata> }` |
 | `nullable(validator)` | `{ type: "nullable", inner: <metadata> }` |
 | `nullish(validator)` | `{ type: "nullish", inner: <metadata> }` |
+| `array` / `optional` / `nullable` / `nullish` | None if the inner validator has none |
+| `tuple` / `union` | None unless every child has metadata |
+| `object(shape)` | Always attached; fields without metadata are omitted from `shape` |
+| `object().map()` | No metadata attached |
+| Async variants, `withContext()` | No metadata attached |
+| `decimal()` | `{ type: "string" }` |
 | Custom function | No metadata attached |
 
 ---
@@ -1434,7 +1500,7 @@ All composition helpers (`optional`, `nullable`, `nullish`, `array`, `tuple`, `u
 
 ```ts
 // Infer output type from a shape object
-type T = InferObject<{ id: typeof number; name: typeof string }>;
+type T = InferObject<{ id: ReturnType<typeof number>; name: ReturnType<typeof string> }>;
 
 // Infer output type from a validator function
 type T = ReturnType<typeof myObjectSchema>;

@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@200be78 -->
+<!-- docs: sync from coderbuzz/codex@b37bd48 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -26,9 +26,9 @@
 | Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
 | Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
 | Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol**: use for codecs/serialization |
-| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **<5 KB gzip**, zero deps |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~5.4 KB min+gzip**, zero deps |
 
-Veta matches **Zod's type inference quality** at under 5 KB gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
+Veta matches **Zod's type inference quality** at ~5.4 KB min+gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
 ---
 
@@ -158,10 +158,9 @@ const vCoerce = object({
 ### Veta vs Zod: Async Validation
 
 ```ts
-// Zod: no built-in async object validation
-// You must manually await each field with Promise.all
+// Zod: async checks go through `.refine(async ...)` and require `parseAsync()`
 
-// Veta: declarative async API
+// Veta: a field validator is itself the async function
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
@@ -181,7 +180,7 @@ const createAccount = objectAsync({
 
 ## Primitive Validators
 
-All primitive validators throw an `Error` on invalid input and return the
+All primitive validators throw a `VetaError` (extends `Error`) on invalid input and return the
 validated (and possibly coerced) value on success.
 
 ### `string(options?)`
@@ -479,10 +478,11 @@ Coercion rules by type:
 | Type      | Coerce behavior                                                           |
 | --------- | ------------------------------------------------------------------------- |
 | `string`  | `String(val)`                                                             |
-| `number`  | `Number(val)`, empty string throws                                       |
+| `number`  | a `number`, or a plain decimal string (trimmed); `""`, hex, `Infinity`, booleans, arrays throw |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
 | `date`    | `new Date(val)`, invalid dates throw                                     |
-| `bigint`  | `BigInt(val)`, floats and non-numeric strings throw                      |
+| `decimal` | a decimal string, a `bigint`, or a safe integer `number`                 |
+| `bigint`  | `BigInt(val)`, floats and non-numeric strings throw; note `""` and `[]` give `0n`, `true` gives `1n` |
 
 `coerce()` composes with all wrappers:
 
@@ -519,7 +519,9 @@ Errors from nested properties include the key name:
 Property "id": Invalid number: expected number, got string
 ```
 
-**Options:** `message` (used when input is not an object), `requiredMessage`
+**Options:** `message` (used when input is not an object), `requiredMessage`,
+`unknownKeys` (`'strip'` default, `'error'`, `'passthrough'`; see
+[Rejecting unknown keys](#rejecting-unknown-keys))
 
 ---
 
@@ -585,6 +587,9 @@ schema({ profile: { fullName: "Jane" }, userAge: "30" });
 | `string`    | Read from `input[altKey]`                        |
 | `function`  | Call `mapFn(input)` and pass result to validator |
 | _(omitted)_ | Read from `input[key]` as normal                 |
+
+The validator `.map()` returns ignores the `unknownKeys` option and carries no
+`METADATA`, so it cannot be passed to `@coderbuzz/proto`.
 
 `.map()` supports nesting and works alongside `optional`, `nullable`, `nullish`,
 `array`, and `union`:
@@ -750,8 +755,9 @@ pipe([string(), coerce(number({ min: 100 }))], { message: "Invalid score" });
 
 ## Async Validators
 
-Every sync helper has an `Async` counterpart. Sync validators run immediately;
-async validators run concurrently via `Promise.all`.
+`object`, `array`, `tuple`, `union` and `pipe` have an `Async` counterpart. Sync
+validators run immediately; async validators run concurrently via `Promise.all`
+(`unionAsync` and `pipeAsync` run in order).
 
 ### `objectAsync(shape, options?)`
 
@@ -782,7 +788,7 @@ const schema = objectAsync({ a: slowValidator, b: fastValidator });
 // Both run concurrently via Promise.all
 ```
 
-**Options:** `message`, `requiredMessage`
+**Options:** `message`, `requiredMessage` (no `unknownKeys`: extra keys are always stripped)
 
 ---
 
@@ -910,10 +916,10 @@ const validateArticle = object(articleShape);
 
 // Async schema
 import { objectAsync } from "@coderbuzz/veta";
-const asyncSchema = objectAsync({ id: number(), name: string() });
-type AsyncResult = InferAsyncObject<
-  typeof asyncSchema extends (...args: any[]) => Promise<infer R> ? R : never
->;
+const asyncShape = { id: number(), name: string() };
+type AsyncResult = InferAsyncObject<typeof asyncShape>;
+// or from the validator: Awaited<ReturnType<typeof asyncSchema>>
+const asyncSchema = objectAsync(asyncShape);
 ```
 
 Additional utility types:
@@ -932,10 +938,12 @@ import type { InferEntry, InferAsyncEntry } from "@coderbuzz/veta";
 import { coerce, number, object, optional, string } from "@coderbuzz/veta";
 
 // InferEntry: extract output type from a single validator
-type TagType = InferEntry<typeof string>;
+const tag = string();
+type TagType = InferEntry<typeof tag>;
 // string
 
-type CountType = InferEntry<typeof number>;
+const count = number();
+type CountType = InferEntry<typeof count>;
 // number
 
 // InferAsyncEntry: extract async output type from a single entry
@@ -956,9 +964,9 @@ type Entity = InferObject<typeof shape>;
 
 ## Schema Metadata (`METADATA`)
 
-Every validator exposes a `METADATA` symbol property describing its shape as a
-`TypeMeta` object. This is used by encoding layers (e.g., protobuf, msgpack
-schemas) to drive serialization without re-parsing the validator.
+Every built-in sync validator exposes a `METADATA` symbol property describing its
+shape as a `TypeMeta` object. This is used by encoding layers (e.g.,
+`@coderbuzz/proto`) to drive serialization without re-parsing the validator.
 
 ```ts
 import {
@@ -1013,7 +1021,11 @@ type TypeMeta =
 Notes:
 - `coerce(validator)` preserves the inner validator's metadata.
 - `pipe(validators)` uses the last validator's metadata.
-- Custom function validators have no metadata.
+- `decimal()` carries `{ type: "string" }`.
+- Custom function validators, `withContext()`, and the async variants have no metadata.
+- `array`, `tuple`, `union`, `optional`, `nullable` and `nullish` get metadata only
+  when every child has it. `object()` always gets metadata, but silently leaves out
+  fields whose validator has none.
 
 ---
 
@@ -1207,13 +1219,13 @@ const userSchema = object({
   email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
   role: union([literal("admin"), literal("editor"), literal("viewer")]),
   birthDate: nullable(coerce(date())),
-  address: optional(addressShape), // shorthand, no object() needed
-  tags: optional([string()]), // shorthand, no array() needed
+  address: optional(object(addressShape)), // optional() needs a validator, not a shape
+  tags: optional(array(string())),
   scores: [coerce(number())], // shorthand, always required
 });
 
 // ── Inferred type ─────────────────────────────────────────────
-type User = InferObject<typeof userSchema>;
+type User = ReturnType<typeof userSchema>; // InferObject takes a shape, not a validator
 
 // ── Validate ──────────────────────────────────────────────────
 const user = userSchema({
@@ -1264,12 +1276,12 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
 | `.safeParse()` | `safeParse(schema, val)` |
-| `z.infer<typeof S>` | `InferObject<typeof S>` |
+| `z.infer<typeof S>` | `ReturnType<typeof schema>`, or `InferObject<typeof shape>` |
 
 **Key behavioral differences:**
 1. Veta uses **options objects** (`{ min: 3 }`) instead of **chainable methods** (`.min(3)`), by design for tree-shaking and TypeScript performance
 2. Veta validators are **called as functions** (`schema(val)`) not `.parse(val)`
-3. Veta **strips unknown keys** by default (like Zod's `.strip()`). There's no `.passthrough()` equivalent
+3. Veta **strips unknown keys** by default (like Zod's `.strip()`). Use `object(shape, { unknownKeys: 'passthrough' })` or `'error'` for Zod's `.passthrough()` / `.strict()`
 4. Veta **throws `VetaError` on invalid input**. Use `safeParse(schema, val)` when you want every failure at once instead. See [Collecting every error](#collecting-every-error)
 5. Veta's object shorthand accepts **plain objects** as nested object schemas, `[v]` as arrays, and `[v1, v2]` as tuples
 
