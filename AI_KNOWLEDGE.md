@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@b37bd48 -->
+<!-- docs: sync from coderbuzz/codex@a6a5df1 -->
 
 # VETA: AI Agent Knowledge File
 
@@ -13,7 +13,10 @@
 
 `veta` validators are **plain functions** with the signature
 `(val: any, ctx?: any) => T`. They throw `VetaError` on invalid input and return the
-validated value on success. Every function exported from `@coderbuzz/veta` either
+validated value on success. **Only a `VetaError` means "invalid input"**: anything
+else a validator throws (a bug, a database outage) propagates unchanged through
+every compound and through `safeParse`, so it becomes a 500, not a 400. Custom
+validators must report bad input with `throw new VetaError(message, { code })`. Every function exported from `@coderbuzz/veta` either
 **creates** a validator function or **wraps** one, except `safeParse` /
 `safeParseAsync`, which run one.
 
@@ -32,7 +35,7 @@ validator = (val: any, ctx?: any) => T    // throws on invalid, returns T on val
 | Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
 | Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
 | Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol**: use for codecs/serialization |
-| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~5.4 KB min+gzip**, zero deps |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~9.5 KB min+gzip** (whole library), zero deps |
 
 Veta matches Zod's type inference quality while being significantly lighter and adding features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
@@ -104,7 +107,7 @@ const vCoerce = object({
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
-  if (exists) throw new Error("Username already taken");
+  if (exists) throw new VetaError("Username already taken", { code: "taken" });
   return name;
 };
 
@@ -127,9 +130,22 @@ import {
   arrayAsync,
   bigint,
   boolean,
+  check,
+  checkAsync,
   coerce,
   date,
   decimal,
+  discriminatedUnion,
+  flattenIssues,
+  isoDate,
+  isVetaError,
+  lazy,
+  picklist,
+  record,
+  refine,
+  refineAsync,
+  withDefault,
+  withMeta,
   type InferAsyncEntry,
   type InferAsyncObject,
   type InferEntry,
@@ -164,7 +180,14 @@ import {
   type ValidationRule,
   // Other exported types
   type VetaIssue,
+  type VetaIssueCode,
+  type VetaErrorOptions,
   type SafeParseResult,
+  type SafeParseOptions,
+  type FlattenedIssues,
+  type RefineIssue,
+  type IsoDateOptions,
+  type AsyncObjectValidator,
   type ContextualValidator,
   type DecimalOptions,
   type ObjectOptions,
@@ -191,7 +214,8 @@ string({ min: 3 }); // min length
 string({ max: 100 }); // max length
 string({ pattern: /^[a-z]+$/ }); // regex test
 string({ min: 3, max: 50, pattern: /^\w+$/ });
-coerce(string()); // String(val), accepts anything non-null/undefined
+coerce(string()); // strings, finite numbers, bigints, booleans as text; objects/arrays/dates throw
+string({ trim: true, length: 3 }); // trim before checks (returns trimmed); exact length
 ```
 
 | Option | Type | Description |
@@ -267,7 +291,7 @@ Strict rejects: `"true"` → "Invalid boolean: expected boolean, got string"
 date(); // strict: only Date instances
 date({ min: new Date("2020-01-01") });
 date({ max: new Date("2030-12-31") });
-coerce(date()); // new Date(val), parses ISO strings, timestamps
+coerce(date()); // Date, epoch ms, or a string starting with an existing YYYY-MM-DD; "2024-02-31", true, "1" throw
 ```
 
 | Option | Type | Description |
@@ -283,7 +307,7 @@ coerce(date()); // new Date(val), parses ISO strings, timestamps
 bigint(); // strict: only bigint
 bigint({ min: 0n });
 bigint({ max: 9999n });
-coerce(bigint()); // BigInt(val), "123" → 123n; floats (1.5) throw; ""/[] → 0n, true → 1n
+coerce(bigint()); // integer string (trimmed) or safe integer: "123" → 123n; "", [], true, "0x10", 1.5 throw
 ```
 
 | Option | Type | Description |
@@ -431,11 +455,11 @@ Wraps primitive validators to accept loose input. Apply at build time, not call
 time.
 
 ```ts
-coerce(string()); // String(val)
+coerce(string()); // scalars only
 coerce(number()); // number, or a decimal string
 coerce(boolean()); // "true"/"1"/1 → true; "false"/"0"/0 → false
-coerce(date()); // new Date(val)
-coerce(bigint()); // BigInt(val)
+coerce(date()); // Date | epoch ms | "YYYY-MM-DD..." string
+coerce(bigint()); // integer text or safe integer
 coerce(decimal({ scale: 2 })); // string, bigint, or a safe integer
 
 // Compose freely
@@ -492,11 +516,12 @@ including class instances, so it does not assert "plain data object".
 
 | Type | Coerce behavior |
 |---|---|
-| `string` | `String(val)` |
+| `string` | a string; a finite number, bigint or boolean as text. Objects, arrays, dates, functions, symbols throw |
 | `number` | a `number`, or a `string` matching `/^[+-]?(\d+(\.\d*)?\|\.\d+)([eE][+-]?\d+)?$/` after trimming. Everything else throws, see below |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
-| `date` | `new Date(val)`, invalid dates throw |
-| `bigint` | `BigInt(val)`, floats and non-numeric strings throw. Inherits `BigInt()` quirks: `""`, `" "` and `[]` → `0n`, `true` → `1n`, `"0x10"` → `16n` |
+| `date` | a `Date`, finite epoch ms, or a string that starts with an existing `YYYY-MM-DD` (then end, `T` or space). Non-calendar dates (`2024-02-31`) throw instead of rolling over |
+| `isoDate` | trims whitespace |
+| `bigint` | an integer string (optional sign, trimmed) or a safe-integer number. `""`, `[]`, `true`, `"0x10"`, `1.5`, `2**60` throw |
 | `decimal` | a decimal `string`, a `bigint`, or a **safe integer** `number`; a fractional number throws |
 
 **`number` used to be `Number(val)`**, which inherits every JavaScript conversion
@@ -600,9 +625,11 @@ schema({ name: "John", userAge: "30", profile: { role: "admin" } });
 | `function` | Call `mapFn(input)` and pass result to validator |
 | _(omitted)_ | Read from `input[key]` as normal |
 
-**`.map()` limits:** the returned validator ignores the `unknownKeys` option of
-the `object()` it came from (extra keys are always stripped), and it has no
-`METADATA`, so `@coderbuzz/proto` cannot compile it.
+**`.map()` and `unknownKeys`/metadata:** the returned validator keeps the
+object's `METADATA` and honours `unknownKeys`, checked against the input keys it
+reads (a string mapping `{ a: "alpha" }` makes `alpha` known). A function
+mapping can read anything, so `.map()` throws at definition when `unknownKeys` is
+not `'strip'` and any key is function-mapped.
 
 `.map()` supports nesting and works alongside `optional`, `nullable`, `nullish`, `array`, and `union`:
 
@@ -649,7 +676,7 @@ First validator to succeed wins. Order matters.
 
 ```ts
 union([number(), string()]); // number first
-union([literal("a"), literal("b")]); // enum pattern
+picklist(["a", "b"]); // enum: use this, not union([literal("a"), literal("b")]) (~190x faster, clearer error)
 union([
   object({ type: literal("user"), id: number() }),
   object({ type: literal("guest"), token: string() }),
@@ -740,16 +767,17 @@ use `safeParseAsync` to collect every failure.
 
 ### objectAsync
 
-Options: `{ message?, requiredMessage? }` only. There is no `unknownKeys`: extra
-keys are always stripped. No `METADATA` is attached (true of every async
-variant).
+Options: the same `ObjectOptions` as `object()`, including `unknownKeys` (checked
+before any async child runs). Returns an `AsyncObjectValidator<T>` with `.map()`,
+`.shape`, `.partial()`, `.pick()`, `.omit()`, `.extend()`. All async variants
+carry the same `METADATA` as their sync counterparts.
 
 ```ts
 const schema = objectAsync({
   name: string(), // sync
   slug: async (val) => slugify(string()(val)), // async
   unique: async (val) => { // async with side effect
-    if (await db.exists(val)) throw new Error("Taken");
+    if (await db.exists(val)) throw new VetaError("Taken", { code: "taken" });
     return string()(val);
   },
 });
@@ -888,9 +916,11 @@ import { METADATA, type TypeMeta } from "@coderbuzz/veta";
 const meta = (validator as any)[METADATA] as TypeMeta | undefined;
 ```
 
-All sync primitive validators and composition helpers attach `TypeMeta` to the
-validator function under `METADATA = Symbol.for("coderbuzz.veta.metadata")`.
-The async variants, `withContext()` and `object().map()` attach none.
+All primitive validators and composition helpers (sync and async) attach
+`TypeMeta` to the validator function under
+`METADATA = Symbol.for("coderbuzz.veta.metadata")`. Custom functions,
+`withContext()` (unless given `{ meta }`) and `lazy()` attach none; describe one
+with `withMeta(validator, meta)`.
 
 ```ts
 (string() as any)[METADATA] // { type: "string" }
@@ -911,16 +941,20 @@ The async variants, `withContext()` and `object().map()` attach none.
 (object({ id: number() }) as any)[METADATA] // { type: "object", shape: { id: { type: "number" } } }
 (coerce(number()) as any)[METADATA]; // { type: "number" }, preserved
 (decimal() as any)[METADATA] // { type: "string" }
+(isoDate() as any)[METADATA] // { type: "string" }
+(picklist(["a", "b"]) as any)[METADATA] // { type: "union", variants: [{ type: "literal", value: "a" }, ...] }
+(withMeta(fn, { type: "string" }) as any)[METADATA] // { type: "string" }
 ```
 
 Custom function validators have no `METADATA`. `pipe()` inherits from the last
 validator in the chain.
 
-**Missing child metadata:** `array`, `optional`, `nullable`, `nullish` get no
-`METADATA` if the inner validator has none; `tuple` and `union` get none unless
-every child has it. `object()` always gets `METADATA`, but its `shape` silently
-omits fields whose validator has none, so a proto codec built from it drops
-those fields from the wire.
+**Missing child metadata is all or nothing (VETA-26):** `array`, `optional`,
+`nullable`, `nullish`, `withDefault`, `refine`, `check` get none if the inner
+validator has none; `object`, `tuple`, `union`, `discriminatedUnion` get none
+unless every child has it. `object()` used to describe only the fields that had
+metadata, and a proto codec built from it silently dropped the others on
+encode. `proto()` now refuses such a schema and points at `withMeta`.
 
 ---
 
@@ -950,11 +984,24 @@ try {
 | `message` | `string`                 | Human-readable error description                    |
 | `path`    | `(string \| number)[]`   | Structured traversal path to the failing field      |
 | `issues`  | `VetaIssue[]`            | Why a composite gave up; `[]` for a leaf failure    |
+| `code`    | `VetaIssueCode \| string`| Machine-readable reason (`'too_small'`, ...); `'custom'` by default |
+| `params`  | `Record<string, unknown> \| undefined` | Values for a translated message, JSON-safe |
+| `reason`  | `string`                 | `message` without the `Property "x": ` prefixes      |
+| `toIssue()` | `() => VetaIssue`      | This failure as an issue                            |
+| `toJSON()`  | `() => object`         | `{ name, message, code, path, params?, issues? }`   |
+
+Constructor: `new VetaError(message, { path?, code?, params?, issues?, reason? })`,
+or the older positional `new VetaError(message, path?, issues?)`.
+`err instanceof VetaError` and `isVetaError(err)` recognise errors from **any
+copy** of veta (shared `Symbol.for('coderbuzz.veta.error')` brand), which
+matters because a veta bundled twice has two classes. Subclasses keep ordinary
+`instanceof`.
 
 `issues` is populated by `union()` (one entry per variant tried, each prefixed
-`Variant N:` and carrying that variant's own path), by `pipe()` when a custom
-message replaces the stage's error, and by `object({ unknownKeys: 'error' })`.
-Everything else leaves it empty.
+`Variant N:` and carrying that variant's own path and code), by `pipe()` when a
+custom message replaces the stage's error, by `object({ unknownKeys: 'error' })`
+(one `unknown_key` per key), and by `check()` when it reports several issues.
+Everything else leaves it empty. Nested issue paths are relative to the parent.
 
 Before, `union()` caught its children with a bare `catch` and threw
 `'Value does not match any of the union types'` with an empty path and no cause.
@@ -994,43 +1041,59 @@ try {
 } catch (err) {
   if (err instanceof VetaError) {
     ctx.status(400);
-    return { error: err.message, path: err.path };
+    return { error: err.reason, code: err.code, path: err.path };
   }
-  ctx.status(500);
-  return { error: "Internal server error" };
+  throw err; // a bug or an outage: let the framework log it and answer 500
 }
 ```
+
+Before 0.5.0 compound validators wrapped **every** error in a `VetaError`, so the
+second branch was unreachable for anything thrown inside a schema: a DB outage
+in an async check became a 400 containing `connect ECONNREFUSED <internal IP>`.
 
 Since `VetaError` extends `Error`, existing `toThrow()` tests continue to work.
 
 ## safeParse: every failure, not just the first
 
 ```ts
-safeParse<T>(validator, value, ctx?): 
+safeParse<T>(validator, value, ctx?, options?: { maxIssues?: number }):
   | { ok: true; value: T }
-  | { ok: false; issues: VetaIssue[] }
+  | { ok: false; issues: VetaIssue[]; truncated: boolean }
 
-safeParseAsync<T>(validator, value, ctx?): Promise<...>   // objectAsync/arrayAsync/tupleAsync
+safeParseAsync<T>(validator, value, ctx?, options?): Promise<...>   // async schemas
 
-interface VetaIssue { readonly path: (string | number)[]; readonly message: string }
+interface VetaIssue {
+  readonly path: (string | number)[];
+  readonly message: string;                    // unprefixed
+  readonly code: VetaIssueCode | (string & {});
+  readonly params?: Readonly<Record<string, unknown>>;  // JSON-safe
+  readonly issues?: VetaIssue[];               // union variants, pipe original, check() extras
+}
+
+flattenIssues(issues): { formErrors: string[]; fieldErrors: Record<string, string[]> } // 'lines.0.amount'
 ```
+
+`maxIssues` stops collection at N issues (`truncated: true`); set it on endpoints
+accepting large arrays. A non-`VetaError` thrown by any validator is re-thrown,
+never reported as an issue.
 
 ```ts
 const result = safeParse(journal, { ref: 'x', lines: [{ account: 1, amount: '10.005' }] });
 if (!result.ok) {
   result.issues;
   // [
-  //   { path: ['ref'],                 message: 'String too short (min: 3)' },
-  //   { path: ['lines', 0, 'account'], message: 'Invalid string: expected string, got number' },
-  //   { path: ['lines', 0, 'amount'],  message: 'Too many fraction digits (max: 2)' },
+  //   { path: ['ref'],                 code: 'too_small',     message: 'String too short (min: 3)', params: { min: 3, type: 'string' } },
+  //   { path: ['lines', 0, 'account'], code: 'invalid_type',  message: 'Invalid string: expected string, got number', params: {...} },
+  //   { path: ['lines', 0, 'amount'],  code: 'invalid_scale', message: 'Too many fraction digits (max: 2)', params: { scale: 2 } },
   // ]
 }
 ```
 
 **How it works.** Compound validators take an optional third argument, an
-internal collector. `safeParse` supplies one; `object`, `array`, `tuple`, their
-async variants and the `optional`/`nullable`/`nullish` wrappers then record each
-child's failure and keep going instead of rethrowing. Without a collector,
+internal collector. `safeParse` supplies one; `object`, `array`, `tuple`,
+`record`, `discriminatedUnion`, `pipe`, `refine`/`check`, their async variants
+and the `optional`/`nullable`/`nullish`/`withDefault`/`lazy`/`withMeta`/`withContext`
+wrappers then record each child's failure and keep going instead of rethrowing. Without a collector,
 which is every call that is not `safeParse`, they take exactly the path they
 always took, and the cost is one `undefined` check per compound.
 
@@ -1039,9 +1102,14 @@ always took, and the cost is one `undefined` check per compound.
 form wants the two separately.
 
 **What stays a leaf, contributing one issue rather than several:**
-- `union()`: no single child to attribute a failure to
-- `pipe()`: a stage cannot run on a value the previous stage rejected
+- `union()`: no single child to attribute a failure to (its issue carries the
+  variants' failures in `issues`); use `discriminatedUnion` for tagged variants
 - your own validators: they do not know about the collector
+
+`pipe()` passes the collector to each stage and stops after a stage that
+recorded issues. `refine`/`check` rules run only when the wrapped validator
+recorded none. `array({ min })` records the length issue and still checks the
+items; `array({ max })` records it and does not.
 
 **Async collection settles rather than races.** In collect mode
 `objectAsync`/`arrayAsync`/`tupleAsync` await every child and report all the
@@ -1058,7 +1126,7 @@ failure with the prefixed message and `VetaError.path`. `safeParse` is additive.
 ## withContext: validators that need request-scoped data
 
 ```ts
-withContext<T, C>(fn: (val: any, ctx: C) => T, options?: { message?: string }): (val: any, ctx?: C) => T
+withContext<T, C>(fn: (val: any, ctx: C) => T, options?: { message?: string; meta?: TypeMeta }): (val: any, ctx?: C) => T
 type ContextualValidator<T, C> = (val: any, ctx?: C) => T
 ```
 
@@ -1097,8 +1165,8 @@ depth, and it would be a breaking change to type inference for existing schemas.
 `withContext` types the context where it is actually read, which is where
 getting it wrong costs something.
 
-**It is a leaf** for `safeParse`: it contributes one issue, like `union` and
-`pipe`.
+It forwards the collector to `fn`, so a `withContext` wrapping an `object()`
+still collects. Pass `{ meta }` to give it metadata.
 
 **Tenancy should not rest on this.** The audit's conclusion in section 2C holds:
 `ctx` is a convenience, not an enforcement boundary. Enforce tenant isolation in
@@ -1137,11 +1205,168 @@ validator as a better error message, not as the control.
 | Tuple length mismatch | `"Expected tuple of length N, got M"`             |
 | Union exhausted       | `"Value does not match any of the union types"`   |
 | Literal mismatch      | `"Value must be exactly: \"value\""`              |
+| Picklist mismatch     | `"Expected one of: \"a\", \"b\""`                  |
+| Discriminator         | `"Property \"kind\": Expected one of: \"a\", \"b\""` |
+| Record key            | `"Key \"k\": <inner message>"`                     |
+| String exact length   | `"String must be exactly N characters"`           |
+| Not an integer        | `"Invalid number: expected an integer, got 1.5"`  |
+| isoDate format        | `"Invalid date: \"2024-2-9\" is not in YYYY-MM-DD format"` |
+| Non-calendar date     | `"Invalid date: \"2024-02-31\" is not a calendar date"` |
 | Object property error | `"Property \"key\": <inner message>"`             |
 | Array element error   | `"Item at index N: <inner message>"`              |
 
 Errors nest:
 `Property "users": Item at index 0: Property "email": String does not match pattern`
+
+---
+
+## Issue codes
+
+Every `VetaError` and `VetaIssue` has a `code`; read `code`/`params`, never
+`message`, to translate or branch. `params` are JSON-safe (dates → ISO strings,
+bigints → strings).
+
+| Code | Source | `params` |
+|---|---|---|
+| `required` | `undefined`/`null` | |
+| `invalid_type` | wrong type, un-coercible input | `{ expected, received }` |
+| `invalid_format` | `pattern`, bad number/decimal/date/integer text | `{ format, pattern? }` |
+| `invalid_date` | non-calendar date, invalid `Date` | |
+| `too_small` / `too_big` | `min` / `max` | `{ min \| max, type }` (`type`: string, number, array, date, bigint, decimal, uint8array) |
+| `invalid_length` | `string({ length })`, tuple length | `{ length, type }` |
+| `not_finite` | `NaN`, `±Infinity` | |
+| `not_integer` | `number({ integer })`, unsafe int in `coerce(bigint())` | |
+| `invalid_scale` / `invalid_precision` | `decimal()` | `{ scale }` / `{ precision }` |
+| `invalid_literal` | `literal()` | `{ expected }` |
+| `invalid_enum` | `picklist()` | `{ options }` |
+| `invalid_union` | `union()` | (variants in `issues`) |
+| `invalid_discriminator` | `discriminatedUnion()` | `{ key, options }` |
+| `invalid_key` | `record()` key | |
+| `unknown_key` | `unknownKeys: 'error'` | `{ keys }` on the thrown error |
+| `context_required` | `withContext()` without ctx | |
+| `custom` | your `VetaError`s without a code; `refine`/`check` without one | |
+
+---
+
+## Added in 0.5.0: reference
+
+```ts
+// Primitives
+isoDate(options?: { min?: ValidationRule<string>; max?: ValidationRule<string>; message?; requiredMessage? })
+  // 'YYYY-MM-DD' string in, same string out; calendar-checked; coerce trims. Use for posting/due dates.
+string({ trim?: boolean; length?: ValidationRule<number>; ... })
+number({ integer?: ValidationRule<boolean>; ... })   // safe integer
+
+// Choices
+picklist(['draft', 'posted', 'void'], { message?, requiredMessage? }) // no 'as const' needed // => 'draft' | 'posted' | 'void'
+discriminatedUnion('kind', [object({ kind: literal('a'), ... }), object({ kind: picklist(['b','c']), ... })], { message?, requiredMessage? })
+  // variants must be object()/objectAsync() whose key field is literal()/picklist(); checked at definition
+
+// Structure
+record(keyValidator, valueValidator, { message?, requiredMessage? })  // Partial<Record<K,V>> for finite K; rejects __proto__
+lazy(() => validator)                         // recursive schemas; no metadata
+withDefault(validator, value | () => value)   // only for undefined; fallback not validated
+withMeta(validator, meta)                     // describe a custom validator for proto
+object(shape).shape / .partial(...keys?) / .pick(...keys) / .omit(...keys) / .extend(shape)
+
+// Rules about the whole value (run only if the value itself passed)
+refine(validator, (value, ctx) => boolean, string | { message, path?, code?, params? })
+check(validator, (value, report, ctx) => void)   // report({ message, path?, code?, params? }) as often as needed
+refineAsync / checkAsync                          // same, rule may await
+
+// Async
+arrayAsync(validator, { concurrency?: number, ... })   // bound concurrent work
+
+// Errors
+isVetaError(err)                                  // same as err instanceof VetaError, across veta copies
+flattenIssues(issues)                             // { formErrors, fieldErrors: { 'a.0.b': [...] } }
+safeParse(v, value, ctx?, { maxIssues? })         // result.truncated when the limit stopped it
+```
+
+### Detailed behavior of the 0.5.0 additions
+
+**`isoDate(options?)`**
+- Strict: input must be a `string` matching `^\d{4}-\d{2}-\d{2}$` exactly (zero-padded, no time part, no whitespace). Coerce: same after `.trim()`. A `Date` is rejected in both modes (`invalid_type`); there is no Date → string conversion because the right timezone for it is unknowable.
+- Calendar check: month 1–12, day within the month, leap years by the Gregorian rule (`2024-02-29` ok, `2023-02-29` and `1900-02-29` rejected, `2000-02-29` ok).
+- `min`/`max` are validated at definition (must themselves be calendar dates, else `Error` at construction) and compared as strings, which is correct because the format is fixed-width.
+- Messages: `Invalid date: expected a 'YYYY-MM-DD' string, got <typeof>`, `Invalid date: "<v>" is not in YYYY-MM-DD format`, `Invalid date: "<v>" is not a calendar date`, `Date too early (min: <min>)`, `Date too late (max: <max>)`.
+
+**`coerce(date())` accepted inputs, exactly**
+- `Date` (returned as the same instance, then `min`/`max` checked; an invalid Date → `invalid_date`).
+- `number`: must be finite; `new Date(n)`; out-of-range epoch (e.g. `1e20`) → `invalid_date`.
+- `string`: trimmed; must match `^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])`; the date part must be a calendar date; then `new Date(text)` must not be Invalid (so `2024-01-15T25:00` fails). Date-only strings parse as **UTC midnight**; date-time strings without an offset parse as **local time** (JavaScript's rule).
+- Anything else (`boolean`, arrays, objects) → `invalid_type`.
+
+**`string({ trim, length })`**
+- `trim` is applied first, then `length` → `min` → `max` → `pattern`, in that order; the first failing check throws. The **trimmed** value is returned.
+- In coerce mode, the text form is produced first (`String(n)` for finite numbers/bigints/booleans), then trimmed.
+
+**`number({ integer })`**
+- `Number.isSafeInteger` check, applied before `min`/`max`. Two messages, one code (`not_integer`): `expected an integer, got 1.5` and `<n> is beyond the safe integer range (2^53-1)`. `integer: { value: true, message }` overrides both.
+
+**`picklist(options, opts?)`**
+- `options`: non-empty readonly tuple of `string | number`; inferred as literals without `as const` (TypeScript `const` type parameter).
+- Lookup is `Set.has` (SameValueZero): `1` and `"1"` are different; `NaN` cannot be listed meaningfully.
+- `undefined`/`null` → `required` (message `requiredMessage ?? 'Required'`), anything else not listed → `invalid_enum` with `params.options` (a copy of the list).
+- Metadata `{ type: 'union', variants: [{ type: 'literal', value }, ...] }`; proto encodes the variant index and zero payload bytes.
+
+**`discriminatedUnion(key, variants, options?)`**
+- Definition-time checks (throw `Error`): every variant has `.shape[key]` whose metadata is `literal` or a union of only literals (i.e. `literal()` / `picklist()`); no tag value is used twice.
+- Runtime: `null`/`undefined` → `required`; non-object or array → `invalid_type`; the tag is read with the object rule (ignored only if inherited from `Object.prototype`). Missing tag → `VetaError('Property "<key>": Required', { path: [key], code: 'required' })`. Unknown tag → `code: 'invalid_discriminator'`, `params: { key, options }`, message `Property "<key>": Expected one of: ...`.
+- The chosen variant receives `(val, ctx, collector)`, so its own errors, paths and `unknownKeys` behave as if it were called directly. With `objectAsync` variants the result is a Promise.
+- Metadata: union of the variants' metadata, only if every variant has some.
+
+**`record(keyValidator, valueValidator, options?)`**
+- Walks `Object.keys(val)` (own enumerable, insertion order). For each key: key `__proto__` → `invalid_key`; `keyValidator(key, ctx)`; the **validator's output** becomes the result key (so a trimming key validator renames keys); an output of `__proto__` is rejected too; then `valueValidator(val[key], ctx, collector)`.
+- Throw mode prefixes: `Key "<k>": ` for key failures, `Property "<k>": ` for value failures; both put `k` (the input key) in `path`.
+- Collect mode: a key failure is recorded at `[..., k]` with the key validator's code (`custom` is mapped to `invalid_key`), and that key's value is not validated.
+- No metadata (TypeMeta has no record variant), so an object containing a `record` cannot be proto-encoded. No async variant: an async value validator would leave Promises in the result.
+
+**`withDefault(validator, fallback)`**
+- Only `undefined` triggers the fallback; `null` goes to the validator. A function fallback is called on every use (fresh objects); a non-function fallback is returned by reference. The fallback is **not** validated.
+- Inside `object()`, a defaulted field is always present in the output even when the key was absent (the "absent stays absent" rule applies only when the output is `undefined`).
+- Output type excludes `undefined`; metadata is the inner validator's, with one `optional` layer unwrapped.
+
+**`lazy(getter)`**
+- `getter` is called once, on the first validation, and cached. Forwards `ctx` and the collector. No metadata.
+
+**`refine(validator, predicate, options)` / `check(validator, rule)`**
+- Order: run `validator`; if it threw, propagate; under `safeParse`, if it recorded any issue, skip the rule; otherwise run the rule with `(value, ctx)` (`refine`) or `(value, report, ctx)` (`check`).
+- `options` for `refine`: a message string, or `RefineIssue = { message, path?, code?, params? }`. `code` defaults to `'custom'`; `path` is relative to the refined value.
+- Throw mode with several reported issues: the **first** becomes the error (`message` prefixed from its path, `path`, `code`, `params`, `reason`) and all of them are in `err.issues` (relative paths). With one issue, `err.issues` is empty.
+- Collect mode: every reported issue is pushed at `collector.path + issue.path`.
+- A non-`VetaError` thrown by the predicate/rule propagates like any other bug.
+- `refineAsync`/`checkAsync` accept a sync or async inner validator and an async rule; they return a Promise even when everything is sync.
+- Keep the rule sync-only in `refine`/`check`: a Promise-returning predicate in `refine` is truthy and always passes.
+
+**`.partial(...keys)` / `.pick(...keys)` / `.omit(...keys)` / `.extend(shape)`**
+- All build a **new** validator via the same factory (`object` or `objectAsync`) with the same `ObjectOptions`, so `unknownKeys` and messages carry over; `pick` with a key the shape lacks throws `Error` at definition. `omit` of a missing key is ignored.
+- `partial()` with no keys wraps every field in `optional()`; with keys, only those. `extend` spreads the new shape over the old one (`{ ...shape, ...extra }`), so same-named keys are replaced and new keys are appended in order; shorthand is normalized.
+- `.shape` is the normalized shape: shorthand entries appear as the `object()`/`array()`/`tuple()` validators they were turned into.
+
+**`arrayAsync({ concurrency })`**
+- Must be a positive integer or `Infinity`, else `Error` at definition. Without it, behaviour is unchanged (all items at once, sync results inline).
+- Throw mode with `concurrency < length`: `concurrency` workers pull indices in order; the first failure sets a flag so no new item starts, and the call rejects with that item's error (`Item at index i: ...`). Items already running finish in the background; their results are discarded.
+- Collect mode: the same worker pool; every item is settled into its own collector; issues are merged in **index order**, independent of completion order. Workers stop pulling new items once `maxIssues` is exhausted or a non-`VetaError` occurs.
+
+**`safeParse(..., { maxIssues })`**
+- `maxIssues` must be ≥ 1 (else `Error`). Every recorded issue decrements a budget shared by all child collectors; when it reaches 0 an internal sentinel (not a `VetaError`) unwinds straight to `safeParse`, which returns `{ ok: false, issues: issues.slice(0, maxIssues), truncated: true }`. Async children running concurrently may overshoot before they notice; the slice trims that.
+- `truncated: true` also when exactly `maxIssues` issues existed; it means "stopped at the limit", not "there were more".
+
+**`flattenIssues(issues)`**
+- `formErrors`: messages of issues with an empty path, in order. `fieldErrors`: `path.join('.')` → messages, in first-seen key order. Built with `Object.fromEntries`, so a `__proto__` path is an own key. Nested `issue.issues` are not flattened.
+
+**`VetaError` construction details**
+- Fields are `declare`d and assigned in the constructor (no class-field `[[Define]]`), `name` lives on the prototype. This keeps a failed validation's dominant cost, error construction, at ≈480 ns in Bun (was ≈630 ns).
+- Wrapping one level up (`Property "k": ` / `Item at index i: `) creates a new `VetaError` carrying the child's `code`, `params`, `issues` and `reason`, with `[segment, ...child.path]`. The child error object is never mutated, so errors a caller caches (e.g. rejected promises in a DataLoader) are safe to re-throw.
+
+Behaviour changes in 0.5.0 an agent must know:
+
+- Non-`VetaError` errors propagate (no wrapping); `safeParse` re-throws them.
+- Absent keys are absent in object output (no `key: undefined`).
+- `coerce(string/bigint/date())` are strict about input types (see Coercion Rules).
+- `object()` metadata is all or nothing; `proto()` refuses undescribed fields.
+- `VetaIssue` has a required `code`; `SafeParseResult` failure has `truncated`.
 
 ---
 
@@ -1162,12 +1387,15 @@ const querySchema = object({
 ### Discriminated Union
 
 ```ts
-const event = union([
+const event = discriminatedUnion("type", [
   object({ type: literal("click"), x: number(), y: number() }),
   object({ type: literal("keyup"), key: string() }),
   object({ type: literal("scroll"), delta: number() }),
 ]);
 ```
+
+Prefer this over `union()` for tagged variants: one `Map` lookup, the chosen
+variant's error at the right path, and full collection under `safeParse`.
 
 ### JSON Body Parsing + Validation
 
@@ -1185,26 +1413,37 @@ const parseBody = pipe([
 const register = objectAsync({
   username: async (val) => {
     const name = string({ min: 3 })(val);
-    if (await db.usernameExists(name)) throw new Error("Username taken");
+    if (await db.usernameExists(name)) throw new VetaError("Username taken", { code: "taken" });
     return name;
   },
   email: async (val) => {
     const email = string({ pattern: /@/ })(val).toLowerCase();
-    if (await db.emailExists(email)) throw new Error("Email taken");
+    if (await db.emailExists(email)) throw new VetaError("Email taken", { code: "taken" });
     return email;
   },
   password: string({ min: 8 }),
 });
 ```
 
-### Enum via Union of Literals
+### Enum
 
 ```ts
-const Role = union([
-  literal("admin"),
-  literal("editor"),
-  literal("viewer"),
-], { message: "Invalid role" });
+const Role = picklist(["admin", "editor", "viewer"], { message: "Invalid role" });
+```
+
+### Create vs PATCH schema
+
+```ts
+const invoiceCreate = object({ ref: string({ trim: true, min: 1 }), amount: decimal({ scale: 2 }), memo: optional(string()) }, { unknownKeys: "error" });
+const invoicePatch = invoiceCreate.partial(); // same fields, all optional, unknownKeys carried over
+// Absent keys stay absent in the output, so Object.keys(patch) is exactly what the client sent.
+```
+
+### Cross-field rule
+
+```ts
+const period = refine(object({ start: isoDate(), end: isoDate() }), (p) => p.end >= p.start,
+  { message: "End date is before start date", path: ["end"] });
 ```
 
 ### Deep Nested with Shorthand
@@ -1333,7 +1572,7 @@ const userSchema = object({
   id: coerce(number({ min: 1 })),
   name: string({ min: 2, max: 100 }),
   email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
-  role: union([literal("admin"), literal("editor"), literal("viewer")]),
+  role: picklist(["admin", "editor", "viewer"]),
   birthDate: nullable(coerce(date())),
   address: optional(object(addressShape)), // optional() needs a validator, not a shape
   tags: optional(array(string())),
@@ -1370,8 +1609,10 @@ const user = userSchema({
 4. **`coerce(number())` rejects empty strings**: `""` → "Invalid number".
 5. **`coerce(bigint())` rejects floats**: `1.5` → "Invalid bigint".
 6. **Object validators strip extra keys** by default: only declared shape keys are
-   returned, unless `unknownKeys: 'error' | 'passthrough'` is set.
-   `objectAsync` and `.map()` always strip.
+   returned, unless `unknownKeys: 'error' | 'passthrough'` is set (same for
+   `objectAsync` and `.map()`). `'passthrough'` never copies `__proto__`.
+   **Absent keys stay absent** in the output, even for `optional()` fields; a
+   value inherited from `Object.prototype` is never read as input.
 7. **`pipe()` metadata = last validator's metadata**: a custom function as the
    last step means no metadata.
 8. **Shorthand tuple requires `as const`** for accurate TypeScript inference:
@@ -1390,8 +1631,13 @@ const user = userSchema({
     `nullable([string()])` and similar pass a non-function to the wrapper and
     throw `TypeError: validator is not a function` on the first call. Wrap with
     `object()` / `array()` first.
-15. **`coerce(bigint())` inherits `BigInt()` quirks**: `""` and `[]` become `0n`,
-    `true` becomes `1n`. `coerce(number())` rejects all three.
+15. **Throw `VetaError`, not `Error`, from custom validators.** A plain `Error`
+    is treated as a bug/outage and propagates out of `safeParse` and every
+    compound (it is no longer wrapped into a `VetaError`).
+16. **`union()` does not catch non-`VetaError`s**: a crashing variant fails the
+    union instead of letting the next variant match.
+17. **Use `isoDate()` for calendar dates**: a `Date` from `"2024-01-15"` is UTC
+    midnight and reads as the 14th west of Greenwich.
 
 ---
 
@@ -1456,7 +1702,7 @@ Errors from individual elements include the index: `Item at index N: <inner mess
 | Validator | Execution Strategy |
 |---|---|
 | `objectAsync` | All field validators run **concurrently** via `Promise.all` |
-| `arrayAsync` | All element validators run **concurrently** via `Promise.all` |
+| `arrayAsync` | All element validators run **concurrently** via `Promise.all`, or at most `concurrency` at a time |
 | `tupleAsync` | All position validators run **concurrently** via `Promise.all` |
 | `unionAsync` | Validators tried **sequentially** (each awaited before next) |
 | `pipeAsync` | Validators run **sequentially** (each output feeds next input) |
@@ -1475,7 +1721,7 @@ schema(input, ctx)
       → vC(input.b.c, ctx)
 ```
 
-All composition helpers (`optional`, `nullable`, `nullish`, `array`, `tuple`, `union`, `pipe`) forward `ctx`. The propagation is synchronous and zero-overhead: `ctx` is a direct argument, never stored or wrapped.
+All composition helpers (`optional`, `nullable`, `nullish`, `withDefault`, `lazy`, `withMeta`, `array`, `tuple`, `record`, `union`, `discriminatedUnion`, `pipe`, `refine`, `check`, and the async variants) forward `ctx`. The propagation is synchronous and zero-overhead: `ctx` is a direct argument, never stored or wrapped.
 
 ### METADATA Propagation Rules
 
@@ -1487,12 +1733,16 @@ All composition helpers (`optional`, `nullable`, `nullish`, `array`, `tuple`, `u
 | `nullable(validator)` | `{ type: "nullable", inner: <metadata> }` |
 | `nullish(validator)` | `{ type: "nullish", inner: <metadata> }` |
 | `array` / `optional` / `nullable` / `nullish` | None if the inner validator has none |
-| `tuple` / `union` | None unless every child has metadata |
-| `object(shape)` | Always attached; fields without metadata are omitted from `shape` |
-| `object().map()` | No metadata attached |
-| Async variants, `withContext()` | No metadata attached |
-| `decimal()` | `{ type: "string" }` |
-| Custom function | No metadata attached |
+| `tuple` / `union` / `discriminatedUnion` | None unless every child has metadata |
+| `object(shape)` | None unless every field has metadata (all or nothing) |
+| `object().map()` | Same as the object |
+| Async variants | Same as their sync counterparts |
+| `refine` / `check` / `withDefault` | The wrapped validator's (`withDefault` unwraps `optional`) |
+| `withContext()` | Only with `{ meta }` |
+| `withMeta(v, meta)` | `meta` |
+| `decimal()` / `isoDate()` | `{ type: "string" }` |
+| `picklist()` | Union of literals |
+| Custom function, `lazy()` | No metadata attached |
 
 ---
 
@@ -1514,9 +1764,14 @@ type ValidationRule<T> = T | { value: T; message: string };
 // TypeMeta, attached to validators under METADATA symbol
 type TypeMeta = { type: "string" } | { type: "number" } | /* ... */;
 
-// ObjectValidator, has .map() method
-type ObjectValidator<T> = {
+// ObjectValidator: .shape, .map() and composition methods (AsyncObjectValidator mirrors it)
+interface ObjectValidator<T> {
   (val: any, ctx?: any): T;
+  readonly shape: { readonly [K in keyof T]-?: (val: any, ctx?: any) => T[K] };
   map(mapping: Partial<Record<keyof T, string | ((data: any) => any)>>): (val: any, ctx?: any) => T;
-};
+  partial(...keys?): ObjectValidator<...>;   // all, or the named keys, optional
+  pick(...keys): ObjectValidator<Pick<T, K>>;
+  omit(...keys): ObjectValidator<Omit<T, K>>;
+  extend(shape): ObjectValidator<T & InferObject<E>>;  // replaces same-named keys
+}
 ```

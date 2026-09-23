@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@b37bd48 -->
+<!-- docs: sync from coderbuzz/codex@a6a5df1 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -26,9 +26,9 @@
 | Async validation | Manual promise chaining | Separate `YupSchema` | `Joi.any().custom()` | **Mirror API**: `objectAsync`, `arrayAsync`, etc. |
 | Context / request-scoped data | Not supported | Not supported | Not supported | **`ctx` forwarding** through every level |
 | Schema metadata | `z.ZodType` internals only | None | `.describe()` | **`METADATA` symbol**: use for codecs/serialization |
-| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~5.4 KB min+gzip**, zero deps |
+| Bundle size | ~35 KB min+gzip | ~20 KB | ~50 KB+ | **~9.5 KB min+gzip** (whole library), zero deps |
 
-Veta matches **Zod's type inference quality** at ~5.4 KB min+gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
+Veta matches **Zod's type inference quality** at ~9.5 KB min+gzip (vs. Zod's ~35 KB), and adds features Zod doesn't have: context forwarding, async mirror API, and schema metadata for binary serialization (used by `@coderbuzz/proto`).
 
 ---
 
@@ -41,6 +41,8 @@ Veta matches **Zod's type inference quality** at ~5.4 KB min+gzip (vs. Zod's ~35
 - **Context forwarding**: pass request-scoped data (SSP identifiers, auth, tenant IDs) through every validator
 - **Schema metadata**: `METADATA` symbol for encoding layers like `@coderbuzz/proto`
 - **Custom error messages**: per-validator or per-rule via `ValidationRule<T>`
+- **Every error at once**: `safeParse` collects all issues, each with a `path`, a stable `code` and `params` for translation; `flattenIssues` groups them per form field
+- **ERP-grade primitives**: exact `decimal()` for money, `isoDate()` for calendar dates, `picklist()`, `discriminatedUnion()`, `record()`, cross-field `refine()`/`check()`, and `.partial()`/`.pick()`/`.omit()`/`.extend()` for create vs. PATCH schemas
 - **Zero dependencies**: no runtime overhead, no `zod` baggage
 - **Runtime agnostic**: Bun, Deno, Node.js, browsers (any ES2022 runtime)
 
@@ -164,7 +166,7 @@ const vCoerce = object({
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
-  if (exists) throw new Error("Username already taken");
+  if (exists) throw new VetaError("Username already taken", { code: "taken" });
   return name;
 };
 
@@ -198,12 +200,22 @@ v(123); // throws "Invalid string: expected string, got number"
 | ----------------- | ------------------------ | ------------------------------------------- |
 | `min`             | `ValidationRule<number>` | Minimum string length (inclusive)           |
 | `max`             | `ValidationRule<number>` | Maximum string length (inclusive)           |
+| `length`          | `ValidationRule<number>` | Exact string length                         |
 | `pattern`         | `ValidationRule<RegExp>` | Regex pattern to test against               |
+| `trim`            | `boolean`                | Trim whitespace before the checks, and return the trimmed string |
 | `message`         | `string`                 | Fallback message for all validation errors  |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null` |
 
-Strict by default. Only accepts `string` values. Use `coerce(string())` to cast
-any value via `String(val)`.
+Strict by default. Only accepts `string` values. `coerce(string())` also accepts
+a finite `number`, a `bigint` or a `boolean`, as their text. Objects, arrays,
+dates, functions and symbols are rejected: `String({})` is `"[object Object]"`,
+which satisfies a `min` check and used to be stored as such.
+
+Use `trim: true` for anything a person types. Without it `"   "` satisfies
+`min: 1`, and a name, a reference or a memo made of spaces is not one.
+
+Lengths are counted in UTF-16 code units, as `.length` does: an emoji counts
+as 2.
 
 **`pattern` must not be sticky, and `/g` is ignored.** `.test()` on a `/g` or
 `/y` regex advances `lastIndex` on the regex object, which the validator holds
@@ -231,8 +243,13 @@ v(Infinity); // throws "Invalid number: expected a finite number, got Infinity"
 | ----------------- | ------------------------ | ------------------------------------------- |
 | `min`             | `ValidationRule<number>` | Minimum value (inclusive)                   |
 | `max`             | `ValidationRule<number>` | Maximum value (inclusive)                   |
+| `integer`         | `ValidationRule<boolean>`| Require a safe integer (quantities, counts, IDs) |
 | `message`         | `string`                 | Fallback message for all validation errors  |
 | `requiredMessage` | `string`                 | Message when value is `undefined` or `null` |
+
+`integer: true` rejects fractions and integers beyond 2^53-1, where a float64
+can no longer tell neighbouring integers apart (`9007199254740993` would be
+stored as `...992`).
 
 Strict by default. Only accepts finite numbers: `NaN`, `Infinity` and
 `-Infinity` are all rejected, in coerce mode too. This matters for amounts,
@@ -278,8 +295,20 @@ v(new Date("2025-06-01")); // Date instance
 v("2025-06-01"); // throws "Invalid date: expected Date instance"
 ```
 
-Strict mode only accepts `Date` instances. Use `coerce(date())` to parse ISO
-strings and numeric timestamps via `new Date(val)`.
+Strict mode only accepts `Date` instances. `coerce(date())` also accepts epoch
+milliseconds and strings that **start with a calendar date** (`YYYY-MM-DD`,
+then the end or a `T`/space time part). That covers ISO 8601 and every
+timestamp format the SQL drivers return (`"2024-01-15 10:00:00+07"`).
+
+It used to be `new Date(val)`, which accepts nearly anything: `true` was 1 ms
+after the epoch, `"1"` was 1 January 2001, `[2024]` was New Year 2024, and
+`"2024-02-31"` rolled over to 2 March. A posting date typed as 31 February
+landed in March, a different accounting period, without an error. A date that
+does not exist is now rejected.
+
+A `Date` is an instant. For a day (a posting date, a due date) use
+[`isoDate()`](#isodateoptions): `"2024-01-15"` parses as UTC midnight, which is
+still the 14th anywhere west of Greenwich.
 
 **Options:**
 
@@ -292,6 +321,32 @@ strings and numeric timestamps via `new Date(val)`.
 
 ---
 
+### `isoDate(options?)`
+
+A calendar date written as `"YYYY-MM-DD"`, returned as that **string**: the
+date-only counterpart of `decimal()`.
+
+```ts
+const postingDate = isoDate({ min: "2024-01-01" });
+postingDate("2024-02-29"); // "2024-02-29"
+postingDate("2023-02-29"); // throws, not a calendar date
+postingDate("2024-2-9");   // throws, must be zero-padded
+postingDate("2023-12-31"); // throws "Date too early (min: 2024-01-01)"
+coerce(isoDate())(" 2024-02-29 "); // "2024-02-29", coerce trims
+```
+
+A posting date, a due date or a birth date is a day, not an instant. Held as a
+`Date` it is an instant at some timezone's midnight, and it moves: an invoice
+dated `2024-01-01` in Jakarta is `2023-12-31T17:00:00Z`, which lands in the
+previous fiscal year the moment any code reads the UTC date. A string cannot
+move, and it is what `DATE` columns mean. Because the format is fixed-width,
+string order is date order, so `min`/`max` (and your own comparisons) are
+plain string comparisons.
+
+**Options:** `min`, `max` (as `"YYYY-MM-DD"`), `message`, `requiredMessage`
+
+---
+
 ### `bigint(options?)`
 
 ```ts
@@ -301,11 +356,14 @@ v(1001n); // throws "BigInt too large (max: 1000)"
 v("123"); // throws "Invalid bigint: expected bigint, got string"
 ```
 
-Use `coerce(bigint())` to cast strings and numbers via `BigInt(val)`. Float
-values like `1.5` throw even in coerce mode.
+`coerce(bigint())` accepts an integer string (optional sign, surrounding
+whitespace trimmed) or a safe-integer `number`. Everything else is rejected.
+It used to be `BigInt(val)`, which has the quirks `Number(val)` had: `""` and
+`"  "` were `0n`, `[]` was `0n`, `true` was `1n` and `"0x10"` was `16n`, so an
+empty ID field in a form validated as ID 0.
 
 **`coerce()` only wraps the primitives that define a coerced form**: `string`,
-`number`, `boolean`, `date`, `bigint`, `decimal`. Anything else throws where you
+`number`, `boolean`, `date`, `bigint`, `decimal`, `isoDate`. Anything else throws where you
 write it. It used to return the validator unchanged, so
 `coerce(object({ amount: number() }))` looked like it coerced into the shape and
 did nothing at all. The strict `number()` inside then rejected every form value.
@@ -477,12 +535,13 @@ Coercion rules by type:
 
 | Type      | Coerce behavior                                                           |
 | --------- | ------------------------------------------------------------------------- |
-| `string`  | `String(val)`                                                             |
+| `string`  | a string, or a finite number, bigint or boolean as text; objects, arrays, dates throw |
 | `number`  | a `number`, or a plain decimal string (trimmed); `""`, hex, `Infinity`, booleans, arrays throw |
 | `boolean` | `true`/`"true"`/`1`/`"1"` → `true`; `false`/`"false"`/`0`/`"0"` → `false` |
-| `date`    | `new Date(val)`, invalid dates throw                                     |
+| `date`    | a `Date`, epoch ms, or a string starting with an existing `YYYY-MM-DD`; anything else throws |
+| `isoDate` | trims surrounding whitespace                                             |
 | `decimal` | a decimal string, a `bigint`, or a safe integer `number`                 |
-| `bigint`  | `BigInt(val)`, floats and non-numeric strings throw; note `""` and `[]` give `0n`, `true` gives `1n` |
+| `bigint`  | an integer string (trimmed) or a safe integer; `""`, hex, floats, booleans, arrays throw |
 
 `coerce()` composes with all wrappers:
 
@@ -518,6 +577,18 @@ Errors from nested properties include the key name:
 ```
 Property "id": Invalid number: expected number, got string
 ```
+
+**A key that is absent from the input is absent from the output**, even when
+its validator is `optional()`. It used to come out as `key: undefined`, an own
+property, and on a PATCH that erased the difference between "not sent" and
+"sent as empty": an update builder that walks `Object.keys(body)` wrote NULL
+over every column the user did not touch. A key sent as `undefined` is kept.
+
+**A value inherited from `Object.prototype` is never read as input.** On a
+plain object, `val.isAdmin` reads `Object.prototype.isAdmin` when the key is
+absent, so once anything in the process has polluted the prototype every schema
+with an optional `isAdmin` would validate it as `true`. Values inherited from
+anywhere else, such as a getter on a class you validate, are read as before.
 
 **Options:** `message` (used when input is not an object), `requiredMessage`,
 `unknownKeys` (`'strip'` default, `'error'`, `'passthrough'`; see
@@ -588,8 +659,10 @@ schema({ profile: { fullName: "Jane" }, userAge: "30" });
 | `function`  | Call `mapFn(input)` and pass result to validator |
 | _(omitted)_ | Read from `input[key]` as normal                 |
 
-The validator `.map()` returns ignores the `unknownKeys` option and carries no
-`METADATA`, so it cannot be passed to `@coderbuzz/proto`.
+The validator `.map()` returns keeps the object's `METADATA` and honours
+`unknownKeys`, checked against the input keys it actually reads: `{ age: "userAge" }`
+makes `userAge` known and `age` unknown. A function mapping can read anything, so
+`.map()` refuses one when `unknownKeys` is not `'strip'`.
 
 `.map()` supports nesting and works alongside `optional`, `nullable`, `nullish`,
 `array`, and `union`:
@@ -610,6 +683,33 @@ const schema = object({
 
 ---
 
+### `.shape`, `.partial()`, `.pick()`, `.omit()`, `.extend()`
+
+Every `object()` and `objectAsync()` validator exposes its field validators as
+`.shape` and can derive new schemas from itself, so a create schema and its
+PATCH schema are not written twice. Options (`unknownKeys`, messages) carry
+over.
+
+```ts
+const invoice = object(
+  { ref: string(), amount: decimal({ scale: 2 }), memo: optional(string()) },
+  { unknownKeys: "error" },
+);
+
+const invoicePatch = invoice.partial();          // every field optional
+const amountOnly  = invoice.partial("amount");   // just these optional
+const summary     = invoice.pick("ref", "amount");
+const noMemo      = invoice.omit("memo");
+const withCcy     = invoice.extend({ currency: string({ length: 3 }) }); // add or replace
+
+invoice.shape.amount("10"); // "10.00": the field validator itself
+```
+
+The derived types are inferred: `ReturnType<typeof invoicePatch>` is
+`{ ref?: string; amount?: string; memo?: string }`.
+
+---
+
 ### `array(validator, options?)`
 
 ```ts
@@ -619,6 +719,11 @@ v([1, "bad"]); // throws "Item at index 1: Invalid number: ..."
 ```
 
 **Options:** `min`, `max`, `message`, `requiredMessage`
+
+Under `safeParse`, a `min` failure is reported and the items present are still
+checked (so the user hears about both at once). A `max` failure stops there:
+validating every item of an oversized array anyway would turn a bound meant to
+limit the work into a list of issues as long as the payload.
 
 ---
 
@@ -655,11 +760,14 @@ union([coerce(string()), coerce(number())]); // everything becomes string
 union([coerce(number()), string()]); // "123" → 123, "abc" → "abc"
 ```
 
-Use `literal()` in a union to build discriminated unions:
+For a fixed set of values use [`picklist()`](#picklistoptions-opts), and for
+object variants tagged by a field use
+[`discriminatedUnion()`](#discriminatedunionkey-variants-options). Both are
+faster than a union and give better errors.
 
-```ts
-const role = union([literal("admin"), literal("editor"), literal("viewer")]);
-```
+A variant that throws something other than a `VetaError` (a bug, a failed
+database lookup) is not a "no match": the error propagates at once instead of
+the next variant being tried and possibly matching.
 
 **Options:** `message` (used when all validators fail)
 
@@ -678,6 +786,74 @@ literal(42, { message: "Must be the answer" });
 ```
 
 Supported value types: `string`, `number`, `boolean`.
+
+---
+
+### `picklist(options, opts?)`
+
+One of a fixed set of strings or numbers: a status, a document type, a
+currency code.
+
+```ts
+const status = picklist(["draft", "posted", "void"]);
+status("posted"); // "posted", typed "draft" | "posted" | "void"
+status("closed"); // throws 'Expected one of: "draft", "posted", "void"'
+```
+
+`union([literal("draft"), literal("posted"), ...])` does the same job by trying
+each literal in turn and building an error for every miss: about 4.4 µs to
+match the fourth of four options, against 23 ns for `picklist`'s `Set` lookup.
+Its error also lists `Variant 0: ... Variant 3: ...`. `picklist` carries union-
+of-literal metadata, so `@coderbuzz/proto` encodes it.
+
+**Options:** `message`, `requiredMessage`
+
+---
+
+### `discriminatedUnion(key, variants, options?)`
+
+A union of object variants told apart by one field. The field is read first and
+exactly one variant runs:
+
+```ts
+const payment = discriminatedUnion("method", [
+  object({ method: literal("card"), cardNumber: string({ length: 16 }) }),
+  object({ method: literal("transfer"), bankCode: string(), account: string() }),
+  object({ method: picklist(["cash", "cheque"]), note: optional(string()) }),
+]);
+
+payment({ method: "card", cardNumber: "1" });
+// throws 'Property "cardNumber": String must be exactly 16 characters'
+payment({ method: "crypto" });
+// throws 'Property "method": Expected one of: "card", "transfer", "cash", "cheque"'
+```
+
+Compared with `union()`: the error is the chosen variant's own, at the right
+path; `safeParse` collects every issue inside that variant; and it costs one
+`Map` lookup instead of one failed validation per variant. Each variant must be
+an `object()`/`objectAsync()` whose `key` field is a `literal()` or a
+`picklist()`; that is checked when the union is defined, as is a tag used by two
+variants.
+
+**Options:** `message` (input is not an object), `requiredMessage`
+
+---
+
+### `record(keyValidator, valueValidator, options?)`
+
+An object used as a dictionary: translations by locale, prices by currency.
+
+```ts
+const prices = record(picklist(["IDR", "USD"]), decimal({ scale: 2 }));
+prices({ IDR: "15000", USD: "1" }); // { IDR: "15000.00", USD: "1.00" }
+prices({ EUR: "1" });               // throws 'Key "EUR": Expected one of: "IDR", "USD"'
+```
+
+With a finite key type the result is typed `Partial<Record<K, V>>`: `record`
+checks the keys that are present, it does not require every possible one. A
+`__proto__` key is rejected, not copied. Collects under `safeParse`.
+
+**Options:** `message` (input is not an object), `requiredMessage`
 
 ---
 
@@ -723,6 +899,42 @@ v("abc"); // throws "Invalid number: ..."
 
 ---
 
+### `withDefault(validator, fallback)`
+
+Uses `fallback` when the value is `undefined`, and validates it otherwise.
+Pass a function for a fresh value per call: a shared `[]` would otherwise be
+the same array in every result. The fallback is returned as is; `null` is a
+value and is validated like any other.
+
+```ts
+const line = object({
+  qty: withDefault(number({ integer: true, min: 1 }), 1),
+  tags: withDefault(array(string()), () => []),
+});
+line({}); // { qty: 1, tags: [] }
+```
+
+---
+
+### `lazy(getter)`
+
+Defers building a validator until first use, for recursive schemas such as a
+chart of accounts or a bill of materials. TypeScript cannot infer a recursive
+type, so declare it:
+
+```ts
+type Account = { code: string; children: Account[] };
+const account: (val: any) => Account = object({
+  code: string(),
+  children: array(lazy(() => account)),
+});
+```
+
+A lazy validator has no metadata, since a recursive type has no finite
+`TypeMeta`.
+
+---
+
 ### `pipe(validators, options?)`
 
 Runs validators in sequence, passing the output of each as the input to the
@@ -751,6 +963,51 @@ Use `options.message` to wrap all pipeline errors with a single message:
 pipe([string(), coerce(number({ min: 100 }))], { message: "Invalid score" });
 ```
 
+Under `safeParse` every stage is given the collector, so `pipe([object({...}), ...])`
+still reports every bad field of the object. A stage that recorded issues ends
+the pipe, because the next stage would run on a value that has already failed.
+For rules about the whole value, `refine()`/`check()` below are usually a better
+fit: they can point an issue at a field.
+
+---
+
+### `refine(validator, predicate, options)` and `check(validator, rule)`
+
+Rules about the whole value: cross-field checks. They run only when `validator`
+accepted the value, so they can rely on its type. `path` points the issue at a
+field, which is what puts it next to the right input on a form.
+
+```ts
+const period = refine(
+  object({ start: isoDate(), end: isoDate() }),
+  (p) => p.end >= p.start,
+  { message: "End date is before start date", path: ["end"] },
+);
+
+period({ start: "2024-02-01", end: "2024-01-31" });
+// throws 'Property "end": End date is before start date', err.path = ["end"]
+```
+
+`check` reports as many issues as it finds. Under `safeParse` they are all
+collected; a direct call throws the first, with the rest in `err.issues`.
+
+```ts
+const journal = check(
+  object({ lines: array(object({ debit: decimal({ scale: 2 }), credit: decimal({ scale: 2 }) })) }),
+  (j, report) => {
+    j.lines.forEach((l, i) => {
+      if (l.debit !== "0.00" && l.credit !== "0.00") {
+        report({ message: "A line is either a debit or a credit", path: ["lines", i], code: "both_sides" });
+      }
+    });
+  },
+);
+```
+
+An issue is `{ message, path?, code?, params? }`; `options` may also be just the
+message string. Both keep the wrapped validator's metadata. `refineAsync` and
+`checkAsync` take a predicate or rule that awaits, such as a uniqueness lookup.
+
 ---
 
 ## Async Validators
@@ -765,7 +1022,7 @@ validators run immediately; async validators run concurrently via `Promise.all`
 const checkUsername = async (val: unknown) => {
   const name = string({ min: 3 })(val);
   const exists = await db.users.exists({ name });
-  if (exists) throw new Error("Username already taken");
+  if (exists) throw new VetaError("Username already taken", { code: "taken" });
   return name;
 };
 
@@ -788,7 +1045,10 @@ const schema = objectAsync({ a: slowValidator, b: fastValidator });
 // Both run concurrently via Promise.all
 ```
 
-**Options:** `message`, `requiredMessage` (no `unknownKeys`: extra keys are always stripped)
+**Options:** the same as `object()`, including `unknownKeys`. With
+`unknownKeys: 'error'` the keys are checked before any async field runs, so a
+request that will be rejected does not first spend a database round trip per
+field. `objectAsync` also has `.map()`, `.shape` and the composition methods.
 
 ---
 
@@ -804,6 +1064,18 @@ const enrich = async (id: any) => {
 const v = arrayAsync(enrich, { min: 1, max: 50 });
 await v(["1", "2", "3"]); // concurrent, all IDs fetched in parallel
 ```
+
+Every item starts at once by default. Bound it with `concurrency`:
+
+```ts
+arrayAsync(checkAccountExists, { concurrency: 10 });
+```
+
+A 5 000-line import whose lines each check an account in the database is
+otherwise 5 000 simultaneous queries against a pool of perhaps twenty
+connections: the import times out, and so does every other request waiting
+for a connection. In throwing mode, the first failure stops new work from
+starting.
 
 ---
 
@@ -886,11 +1158,12 @@ const result = adResponseSchema(rawData, { ssp: "gam" });
 ```
 
 Context is forwarded through the **compound** validators: `object`, `array`,
-`tuple`, `union`, `pipe`, `optional`, `nullable`, `nullish`, `objectAsync`,
-`arrayAsync`, `tupleAsync`, `unionAsync`, `pipeAsync`.
+`tuple`, `record`, `union`, `discriminatedUnion`, `pipe`, `refine`, `check`,
+`optional`, `nullable`, `nullish`, `withDefault`, `lazy`, `withMeta`, and the
+async variants. `refine`/`check` rules receive it as their last argument.
 
 The built-in **leaf** validators (`string`, `number`, `boolean`, `date`,
-`bigint`, `decimal`, `uint8array`, `literal`) take one argument and ignore any
+`bigint`, `decimal`, `isoDate`, `uint8array`, `literal`, `picklist`) take one argument and ignore any
 context passed to them. They have no children to forward it to and no use for it
 themselves. Your own validators are where context is read; `withContext()` makes
 a missing one a clear failure rather than a `TypeError`.
@@ -931,6 +1204,8 @@ Additional utility types:
 | `InferEntry<T>`       | Infers the output type of a single shape entry                      |
 | `InferAsyncEntry<T>`  | Infers the async output type of a single shape entry                |
 | `ValidationRule<T>`   | `T \| { value: T; message: string }`, for custom per-rule messages |
+| `ObjectValidator<T>` / `AsyncObjectValidator<T>` | What `object()` / `objectAsync()` return, with `.shape` and the composition methods |
+| `VetaIssue`, `VetaIssueCode`, `SafeParseResult<T>`, `FlattenedIssues` | See [Error Reference](#error-reference) |
 | `TypeMeta`            | Discriminated union describing the shape of a validator             |
 
 ```ts
@@ -959,6 +1234,12 @@ const shape = { id: number(), name: string(), role: optional(string()) };
 type Entity = InferObject<typeof shape>;
 // { id: number; name: string; role?: string | undefined }
 ```
+
+`InferObject` and `InferAsyncObject` decide optionality by the same rule: a
+field is optional exactly when its output type includes `undefined`. They used
+to differ: `unknown()` was required in `object()` and optional in
+`objectAsync()`, and nested shorthand objects in `objectAsync()` did not get
+optional keys at all.
 
 ---
 
@@ -1020,36 +1301,120 @@ type TypeMeta =
 
 Notes:
 - `coerce(validator)` preserves the inner validator's metadata.
-- `pipe(validators)` uses the last validator's metadata.
-- `decimal()` carries `{ type: "string" }`.
-- Custom function validators, `withContext()`, and the async variants have no metadata.
-- `array`, `tuple`, `union`, `optional`, `nullable` and `nullish` get metadata only
-  when every child has it. `object()` always gets metadata, but silently leaves out
-  fields whose validator has none.
+- `pipe(validators)` uses the last validator's metadata; `refine`, `check` and
+  `withDefault` keep the wrapped validator's.
+- `decimal()` and `isoDate()` carry `{ type: "string" }`; `picklist()` a union of literals.
+- The async variants carry the same metadata as their sync counterparts.
+- Custom function validators, `withContext()` and `lazy()` have none. Describe
+  one with `withMeta(validator, meta)`, or `withContext(fn, { meta })`.
+- **Metadata is all or nothing.** `object`, `array`, `tuple`, `union`,
+  `discriminatedUnion`, `optional`, `nullable` and `nullish` get it only when
+  every child has it. `object()` used to describe the fields that had metadata
+  and silently leave out the rest, and `@coderbuzz/proto` then built a codec
+  that dropped those fields: a round trip lost data without an error. Now
+  `proto()` refuses the schema and says which helper to use.
+
+```ts
+const upper = (v: any) => String(v).toUpperCase();
+object({ ref: string(), currency: upper });                               // no metadata
+object({ ref: string(), currency: withMeta(upper, { type: "string" }) }); // fully described
+```
+
+`withMeta` is a promise about the output type that nothing checks: describing a
+function that returns numbers as `{ type: "string" }` produces a codec that
+corrupts them.
 
 ---
 
 ## Error Reference
 
 All validators throw `VetaError` (exported from `@coderbuzz/veta`) when validation fails.
-`VetaError` extends `Error`. Use `err instanceof VetaError` to distinguish validation
-failures from other runtime errors.
+`VetaError` extends `Error`. Use `err instanceof VetaError` (or `isVetaError(err)`) to
+distinguish validation failures from other runtime errors.
 
 ```ts
 import { VetaError, string } from "@coderbuzz/veta";
 
 try {
-  string({ min: 3 })(input);
+  object({ name: string({ min: 3 }) })(input);
 } catch (err) {
   if (err instanceof VetaError) {
-    console.log(err.message); // "String too short (min: 3)"
-    console.log(err.path);    // [], structured path to the failing field
+    err.message; // 'Property "name": String too short (min: 3)'
+    err.reason;  // "String too short (min: 3)", without the location prefix
+    err.path;    // ["name"]
+    err.code;    // "too_small"
+    err.params;  // { min: 3, type: "string" }
+    err.toIssue(); // { path: ["name"], message: "String too short (min: 3)", code: "too_small", params: {...} }
   }
 }
 ```
 
 `path` tracks traversal through nested objects, arrays, and tuples:
 `["users", 1, "email"]` for the 2nd user's email field.
+
+### Only a `VetaError` is a validation failure
+
+A validator reports bad input by throwing a `VetaError`. **Anything else it
+throws propagates unchanged** through every compound validator and through
+`safeParse`: a `TypeError` from a bug, a database timeout inside an async
+uniqueness check. It reaches your error handler as the 500 it is.
+
+It used to be wrapped. A database outage inside an async email check became
+`VetaError: Property "email": connect ECONNREFUSED 10.0.0.5:5432`, a 400 that told
+the client the database's internal address and told the operator nothing,
+because 4xx responses are not logged as failures. `union()` was worse: a variant
+that crashed was treated as "no match" and the next variant was tried.
+
+So write custom validators with `VetaError`, not `Error`:
+
+```ts
+const username = async (val: unknown) => {
+  const name = string({ min: 3 })(val);
+  if (await db.users.exists({ name })) {
+    throw new VetaError("Username already taken", { code: "taken" });
+  }
+  return name;
+};
+```
+
+`new VetaError(message, { path?, code?, params?, issues? })`; `code` defaults to
+`"custom"`. The older positional form `new VetaError(message, path, issues)` still
+works. `instanceof VetaError` recognises errors from any copy of veta in the
+process (a veta bundled twice has two classes), through a shared brand.
+`JSON.stringify(err)` includes `message`, `code`, `path`, `params` and `issues`.
+
+### Codes and params
+
+Every failure carries a machine-readable `code`, and the values a translated
+message needs in `params`. Messages are English prose and may change between
+versions; codes do not. Show errors in another language, or decide what to do
+based on why a field failed, from `code` and `params`, never from `message`.
+
+| Code                    | Produced by                                                   | `params`                          |
+| ----------------------- | ------------------------------------------------------------- | --------------------------------- |
+| `required`              | any validator, for `undefined`/`null`                          |                                   |
+| `invalid_type`          | wrong type (and coerce inputs it cannot take)                  | `{ expected, received }`          |
+| `invalid_format`        | `pattern`; unparseable number/decimal/date/integer text        | `{ format, pattern? }`            |
+| `invalid_date`          | a date that does not exist, an invalid `Date`                  |                                   |
+| `too_small` / `too_big` | `min` / `max` on any type                                      | `{ min \| max, type }`            |
+| `invalid_length`        | `string({ length })`, tuple length                             | `{ length, type }`                |
+| `not_finite`            | `NaN`, `Infinity`                                              |                                   |
+| `not_integer`           | `number({ integer })`; unsafe integer in `coerce(bigint())`    |                                   |
+| `invalid_scale`         | `decimal({ scale })`                                           | `{ scale }`                       |
+| `invalid_precision`     | `decimal({ precision })`                                       | `{ precision }`                   |
+| `invalid_literal`       | `literal()`                                                    | `{ expected }`                    |
+| `invalid_enum`          | `picklist()`                                                   | `{ options }`                     |
+| `invalid_union`         | `union()` (see `issues`)                                       |                                   |
+| `invalid_discriminator` | `discriminatedUnion()`                                         | `{ key, options }`                |
+| `invalid_key`           | `record()` key                                                 |                                   |
+| `unknown_key`           | `object({ unknownKeys: 'error' })`                             | `{ keys }` on the thrown error    |
+| `context_required`      | `withContext()` without a context                              |                                   |
+| `custom`                | your validators, unless you pass a code                        |                                   |
+
+`type` in `too_small`/`too_big` is `string`, `number`, `array`, `date`,
+`bigint`, `decimal` or `uint8array`, so "at least 3 characters" and "at least 3
+items" can be told apart. `params` are always JSON-safe: dates are ISO strings
+and bigints decimal strings, so an issue list can go straight into a response.
 
 Messages follow a consistent pattern:
 
@@ -1090,9 +1455,9 @@ const result = safeParse(journal, { ref: "x", lines: [{ account: 1, amount: "10.
 if (!result.ok) {
   result.issues;
   // [
-  //   { path: ["ref"],                 message: "String too short (min: 3)" },
-  //   { path: ["lines", 0, "account"], message: "Invalid string: expected string, got number" },
-  //   { path: ["lines", 0, "amount"],  message: "Too many fraction digits (max: 2)" },
+  //   { path: ["ref"],                 code: "too_small",     message: "String too short (min: 3)", params: {...} },
+  //   { path: ["lines", 0, "account"], code: "invalid_type",  message: "Invalid string: expected string, got number", params: {...} },
+  //   { path: ["lines", 0, "amount"],  code: "invalid_scale", message: "Too many fraction digits (max: 2)", params: {...} },
   // ]
 } else {
   result.value; // fully typed
@@ -1106,13 +1471,44 @@ Each issue's `message` is the leaf validator's own, without the
 `Property "x": Item at index 2:` prefixes the throwing form builds, since `path`
 already says where it happened and a form wants the two separately.
 
-`union()`, `pipe()` and your own custom validators stay leaves: a union has no
-single child to attribute a failure to, a pipe stage cannot run on a value the
-previous stage rejected, and a custom validator does not know about the
-collector. Each contributes one issue rather than several.
+Collection reaches through `object`, `array`, `tuple`, `record`,
+`discriminatedUnion`, `pipe`, `refine`/`check`, the async variants, and the
+`optional`/`nullable`/`nullish`/`withDefault`/`lazy` wrappers. `union()` and
+your own custom validators stay leaves: a union has no single child to
+attribute a failure to (use `discriminatedUnion` when the variants are tagged),
+and a custom validator does not know about the collector. Each contributes one
+issue; a union's issue carries each variant's failure in `issues`.
 
 Calling a validator directly is completely unaffected. It throws on the first
 failure exactly as before.
+
+**Group them for a form** with `flattenIssues`:
+
+```ts
+import { flattenIssues } from "@coderbuzz/veta";
+
+if (!result.ok) {
+  const { formErrors, fieldErrors } = flattenIssues(result.issues);
+  // formErrors:  messages at the root (path [])
+  // fieldErrors: { "ref": ["String too short (min: 3)"], "lines.0.amount": ["Too many fraction digits (max: 2)"] }
+}
+```
+
+**Bound the work** with `maxIssues` on any endpoint that accepts a large
+array. A 10 000-line import in which every line is wrong otherwise produces
+tens of thousands of issues, a response body larger than the request, built
+for whoever sent the payload:
+
+```ts
+const result = safeParse(importSchema, body, ctx, { maxIssues: 100 });
+if (!result.ok && result.truncated) {
+  // stopped at 100; there may be more
+}
+```
+
+**Only validation failures become issues.** A non-`VetaError` a validator
+throws is re-thrown by `safeParse`; see
+[Only a `VetaError` is a validation failure](#only-a-vetaerror-is-a-validation-failure).
 
 ### Why a union or pipe rejected a value
 
@@ -1149,7 +1545,14 @@ patch({ memmo: "audit correction" });  // throws: Unknown key: "memmo"
 
 `unknownKeys` is `'strip'` by default: unchanged behaviour, keys the shape does
 not mention are dropped. `'error'` rejects them, `'passthrough'` copies them onto
-the result unvalidated.
+the result unvalidated. Under `safeParse`, `'error'` reports one `unknown_key`
+issue per key, at that key's path.
+
+`'passthrough'` never copies a `__proto__` key. `JSON.parse` turns
+`{"__proto__": {"isAdmin": true}}` into an object with an own `__proto__`
+property, and assigning that onto the result replaced the result's prototype:
+`result.isAdmin` became `true` without `isAdmin` appearing in `Object.keys`.
+`'error'` reports it as unknown like any other key.
 
 `'error'` is worth reaching for on a partial-update endpoint. With `'strip'`, a
 `PATCH` body of `{ "memmo": "audit correction" }` (a typo for `memo`) validates
@@ -1194,16 +1597,15 @@ import {
   array,
   boolean,
   coerce,
-  date,
+  isoDate,
   type InferObject,
-  literal,
   nullable,
   number,
   object,
   optional,
+  picklist,
   pipe,
   string,
-  union,
 } from "@coderbuzz/veta";
 
 // ── Shape definition ──────────────────────────────────────────
@@ -1216,9 +1618,9 @@ const addressShape = {
 const userSchema = object({
   id: coerce(number({ min: 1 })),
   name: string({ min: 2, max: 100 }),
-  email: pipe([string(), (s: string) => s.toLowerCase().trim()]),
-  role: union([literal("admin"), literal("editor"), literal("viewer")]),
-  birthDate: nullable(coerce(date())),
+  email: pipe([string({ trim: true }), (s: string) => s.toLowerCase()]),
+  role: picklist(["admin", "editor", "viewer"]),
+  birthDate: nullable(coerce(isoDate())),
   address: optional(object(addressShape)), // optional() needs a validator, not a shape
   tags: optional(array(string())),
   scores: [coerce(number())], // shorthand, always required
@@ -1265,17 +1667,28 @@ Most migrations from Zod are straightforward. Here are the key differences:
 | `z.array(z.string())` | `array(string())` or shorthand `[string()]` |
 | `z.tuple([...])` | `tuple([...])` or shorthand `[a, b]` with >1 element |
 | `z.union([...])` | `union([...])` |
+| `z.discriminatedUnion(k, [...])` | `discriminatedUnion(k, [...])` |
+| `z.enum([...])` | `picklist([...])` |
+| `z.record(k, v)` | `record(k, v)` |
+| `z.lazy(() => S)` | `lazy(() => S)` |
 | `z.literal(v)` | `literal(v)` |
 | `z.optional(z.string())` | `optional(string())` |
 | `z.nullable(z.string())` | `nullable(string())` |
 | `z.string().min(3)` | `string({ min: 3 })` |
 | `z.string().max(100)` | `string({ max: 100 })` |
 | `z.string().regex(/^a+$/)` | `string({ pattern: /^a+$/ })` |
+| `z.string().length(3)` / `.trim()` | `string({ length: 3, trim: true })` |
+| `z.number().int()` | `number({ integer: true })` |
+| `z.string().date()` | `isoDate()` |
 | `z.coerce.number()` | `coerce(number())` |
 | `.transform(fn)` | `pipe([validate, fn])` |
+| `.refine(fn, { path })` / `.superRefine(fn)` | `refine(v, fn, { message, path })` / `check(v, fn)` |
+| `.default(x)` | `withDefault(v, x)` |
+| `.partial()` / `.pick()` / `.omit()` / `.extend()` | the same methods on `object()` |
+| `error.flatten()` | `flattenIssues(result.issues)` |
 | `z.undefined()` | Used `optional()` |
 | `.parse()` | Call as function: `schema(val)` |
-| `.safeParse()` | `safeParse(schema, val)` |
+| `.safeParse()` | `safeParse(schema, val)`, returning `{ ok, value }` or `{ ok: false, issues, truncated }` |
 | `z.infer<typeof S>` | `ReturnType<typeof schema>`, or `InferObject<typeof shape>` |
 
 **Key behavioral differences:**
