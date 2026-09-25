@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@a6a5df1 -->
+<!-- docs: sync from coderbuzz/codex@a7c7bb5 -->
 
 # VETA: AI Agent Knowledge File
 
@@ -939,6 +939,7 @@ with `withMeta(validator, meta)`.
 (tuple([string(), number()]) as any)[METADATA] // { type: "tuple", items: [...] }
 (union([string(), number()]) as any)[METADATA] // { type: "union", variants: [...] }
 (object({ id: number() }) as any)[METADATA] // { type: "object", shape: { id: { type: "number" } } }
+(record(string(), number()) as any)[METADATA] // { type: "record", key: { type: "string" }, value: { type: "number" } }
 (coerce(number()) as any)[METADATA]; // { type: "number" }, preserved
 (decimal() as any)[METADATA] // { type: "string" }
 (isoDate() as any)[METADATA] // { type: "string" }
@@ -951,8 +952,8 @@ validator in the chain.
 
 **Missing child metadata is all or nothing (VETA-26):** `array`, `optional`,
 `nullable`, `nullish`, `withDefault`, `refine`, `check` get none if the inner
-validator has none; `object`, `tuple`, `union`, `discriminatedUnion` get none
-unless every child has it. `object()` used to describe only the fields that had
+validator has none; `object`, `tuple`, `union`, `discriminatedUnion`, `record`
+get none unless every child has it. `object()` used to describe only the fields that had
 metadata, and a proto codec built from it silently dropped the others on
 encode. `proto()` now refuses such a schema and points at `withMeta`.
 
@@ -1320,7 +1321,7 @@ safeParse(v, value, ctx?, { maxIssues? })         // result.truncated when the l
 - Walks `Object.keys(val)` (own enumerable, insertion order). For each key: key `__proto__` → `invalid_key`; `keyValidator(key, ctx)`; the **validator's output** becomes the result key (so a trimming key validator renames keys); an output of `__proto__` is rejected too; then `valueValidator(val[key], ctx, collector)`.
 - Throw mode prefixes: `Key "<k>": ` for key failures, `Property "<k>": ` for value failures; both put `k` (the input key) in `path`.
 - Collect mode: a key failure is recorded at `[..., k]` with the key validator's code (`custom` is mapped to `invalid_key`), and that key's value is not validated.
-- No metadata (TypeMeta has no record variant), so an object containing a `record` cannot be proto-encoded. No async variant: an async value validator would leave Promises in the result.
+- Metadata `{ type: 'record', key, value }` when both the key and the value validator have metadata; none otherwise (all or nothing). `@coderbuzz/proto` encodes it as `varint(count)` + key/value pairs. In veta 0.5.0 and earlier there was no record variant, so an object containing a `record` could not be proto-encoded. No async variant: an async value validator would leave Promises in the result.
 
 **`withDefault(validator, fallback)`**
 - Only `undefined` triggers the fallback; `null` goes to the validator. A function fallback is called on every use (fresh objects); a non-function fallback is returned by reference. The fallback is **not** validated.

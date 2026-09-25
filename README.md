@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@a6a5df1 -->
+<!-- docs: sync from coderbuzz/codex@a7c7bb5 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -1291,6 +1291,7 @@ type TypeMeta =
   | { type: "unknown" }
   | { type: "literal"; value: any }
   | { type: "object"; shape: Record<string, TypeMeta> }
+  | { type: "record"; key: TypeMeta; value: TypeMeta }
   | { type: "array"; items: TypeMeta }
   | { type: "tuple"; items: TypeMeta[] }
   | { type: "optional"; inner: TypeMeta }
@@ -1303,7 +1304,8 @@ Notes:
 - `coerce(validator)` preserves the inner validator's metadata.
 - `pipe(validators)` uses the last validator's metadata; `refine`, `check` and
   `withDefault` keep the wrapped validator's.
-- `decimal()` and `isoDate()` carry `{ type: "string" }`; `picklist()` a union of literals.
+- `decimal()` and `isoDate()` carry `{ type: "string" }`; `picklist()` a union of literals;
+  `record(k, v)` carries `{ type: "record", key, value }` when both `k` and `v` have metadata.
 - The async variants carry the same metadata as their sync counterparts.
 - Custom function validators, `withContext()` and `lazy()` have none. Describe
   one with `withMeta(validator, meta)`, or `withContext(fn, { meta })`.
