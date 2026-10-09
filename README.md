@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@a69e432 -->
+<!-- docs: sync from coderbuzz/codex@b6a0d29 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -596,6 +596,15 @@ plain object, `val.isAdmin` reads `Object.prototype.isAdmin` when the key is
 absent, so once anything in the process has polluted the prototype every schema
 with an optional `isAdmin` would validate it as `true`. Values inherited from
 anywhere else, such as a getter on a class you validate, are read as before.
+
+**A declared `__proto__` field comes out as an own key**, as `JSON.parse` makes
+it. A shape may declare one (`{ ['__proto__']: ... }`, computed, since a literal
+`__proto__:` sets the shape's prototype instead). Before 0.6.1 the result was
+built with `result.__proto__ = value`, which replaced the result's prototype:
+`{"__proto__": {"isAdmin": true}}` gave a result with no own keys whose
+`isAdmin` read `true`. `.partial()`, `.pick()`, `.omit()` and shorthand shapes
+dropped the field. Note that `Object.assign(target, result)` still assigns it,
+and so still replaces `target`'s prototype; spread (`{ ...result }`) does not.
 
 **Options:** `message` (used when input is not an object), `requiredMessage`,
 `unknownKeys` (`'strip'` default, `'error'`, `'passthrough'`; see

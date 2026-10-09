@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@a69e432 -->
+<!-- docs: sync from coderbuzz/codex@b6a0d29 -->
 
 # VETA: AI Agent Knowledge File
 
@@ -1697,7 +1697,11 @@ const user = userSchema({
    returned, unless `unknownKeys: 'error' | 'passthrough'` is set (same for
    `objectAsync` and `.map()`). `'passthrough'` never copies `__proto__`.
    **Absent keys stay absent** in the output, even for `optional()` fields; a
-   value inherited from `Object.prototype` is never read as input.
+   value inherited from `Object.prototype` is never read as input. A shape that
+   declares `['__proto__']` yields an **own** `__proto__` key (as `JSON.parse`),
+   never a replaced prototype, in every path (closure, codegen, collect, async,
+   `.partial/.pick/.omit/.extend/.map`, shorthand, metadata). `.map(mapping)`
+   reads only the mapping's own keys.
 7. **`pipe()` metadata = last validator's metadata**: a custom function as the
    last step means no metadata.
 8. **Shorthand tuple requires `as const`** for accurate TypeScript inference:
