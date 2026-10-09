@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@a7c7bb5 -->
+<!-- docs: sync from coderbuzz/codex@a69e432 -->
 
 # VETA: AI Agent Knowledge File
 
@@ -43,16 +43,43 @@ Veta matches Zod's type inference quality while being significantly lighter and 
 
 ## Benchmarks
 
-Full results at **[github.com/coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks)**.
+Measured with the in-repo suite (`bun run bench -- --pkg veta`), not the public benchmarks repo: Intel Xeon Platinum 8255C @ 2.50GHz, 4 vCPU Linux VM, Bun 1.4.2, 2 processes x 8 kept rounds of 300 ms each, 2026-10-09 (codex `b9ab697`). Competitors: Zod 4.6.5, Valibot 1.5.0, TypeBox 1.3.36, ArkType 2.2.8, Joi 18.2.9, Yup 1.7.1. "Before" is veta 0.2.23 (`cca8983`), the version before the 2026-09 performance work. Higher is better; "Before" checks use `try`/`catch` (the old version has no `is()`); ratios are medians, and every difference listed as a win passed the suite's noise rule (the gap exceeds 3x the larger coefficient of variation, and the per-process ranges do not overlap).
 
-All tests on Apple M-series, Bun runtime. Higher is better.
+| Suite | veta | Zod | vs Zod | Before | vs before |
+|---|---|---|---|---|---|
+| Simple object, boolean check `is()` | **49.2M ops/s** | 3.36M | **14.7x** | 21.4M | 2.30x |
+| Simple object, parse | **35.6M ops/s** | 3.19M | **11.2x** | 20.7M | 1.72x |
+| Simple object, all issues (`safeParse`) | **3.99M ops/s** | 0.31M | **12.7x** | n/a | n/a |
+| Complex nested object + coercion, `is()` | **8.25M ops/s** | 0.84M | **9.8x** | 1.34M | 6.15x |
+| Complex nested object + coercion, parse | **3.17M ops/s** | 0.70M | **4.5x** | 1.04M | 3.03x |
+| Complex nested object, all issues (`safeParse`) | **1.63M ops/s** | 0.19M | **8.6x** | n/a | n/a |
+| `coerce(number/boolean/string/date)` object, parse | **6.97M ops/s** | 4.05M | **1.7x** | 6.19M | 1.13x |
+| Union, `is()` | **38.5M ops/s** | 1.57M | **24.6x** | 0.27M | 142x |
+| Union, parse | **26.3M ops/s** | 1.60M | **16.4x** | 0.27M | 98x |
 
-| Scenario | @coderbuzz/veta | Zod | Factor |
-|---|---|---|---|
-| Simple object `{ name, age, active }` | **24.01M ops/s** | 3.33M | **7.2x** |
-| Complex nested object + coercion | **3.89M ops/s** | 1.02M | **3.8x** |
-| Coercion `coerce(number/boolean/string/date)` | **10.04M ops/s** | 2.23M | **4.5x** |
-| Error handling (invalid input) | **1.23M ops/s** | 0.81M | **1.5x** |
+First-error suites (`safeParse(..., { maxIssues: 1 })`; Zod has no such mode): 0.88M ops/s on the simple object (2.6x before), 0.68M on the complex one (2.9x before).
+
+TypeBox, ArkType and Valibot are not beaten everywhere: TypeBox is faster on the simple-object and union suites (veta reaches 0.43x to 0.65x of it), and Valibot is faster on the first-error suites. Veta is ahead of ArkType on the complex-object `is()` suite (1.07x) and ahead of every competitor on complex parse, coerce and both all-issues suites. "n/a": the old version has no `safeParse`.
+
+> Numbers move with the machine. Run them yourself: `bun run bench -- --pkg veta`. The public benchmarks repo ([github.com/coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks)) has its own, older runs on other hardware.
+
+Raw detail for agents (same run; ops/s medians, CV% of the kept rounds; paired = per-round ratio of veta to the reference, rounds where veta was ahead out of 16):
+
+| Suite | veta ops/s (CV%) | vs Zod paired | vs before paired | fastest competitor |
+|---|---|---|---|---|
+| simple-check | 49,243,667 (0.98) | 14.61x (16/16) | 2.30x (16/16) | TypeBox 99.5M, veta 0.495x |
+| simple-parse | 35,620,464 (1.95) | 11.22x (16/16) | 1.73x (16/16) | TypeBox 83.9M, veta 0.425x |
+| simple-invalid-first | 882,882 (9.65) | n/a | 2.63x (16/16) | Valibot 3.51M, veta 0.251x |
+| simple-invalid-all | 3,994,799 (5.11) | 12.60x (16/16) | n/a | veta (Valibot 1.31M is second) |
+| complex-check | 8,248,632 (1.18) | n/a (9.84x of medians) | 6.14x (16/16) | veta (ArkType 7.71M is second) |
+| complex-parse | 3,169,338 (2.78) | n/a (4.51x of medians) | n/a (3.03x of medians) | veta |
+| complex-invalid-first | 683,600 (3.50) | n/a | n/a (2.85x of medians) | Valibot, veta 0.333x |
+| complex-invalid-all | 1,632,885 (2.30) | n/a (8.56x of medians) | n/a | veta (Valibot 0.54M is second) |
+| coerce-parse | 6,967,340 (1.33) | n/a (1.72x of medians) | n/a (1.13x of medians) | veta |
+| union-check | 38,538,259 (2.02) | n/a (24.62x of medians) | n/a (141.7x of medians) | TypeBox 54.6M, veta 0.649x |
+| union-parse | 26,306,638 (1.52) | n/a (16.43x of medians) | n/a (97.7x of medians) | TypeBox 40.5M, veta 0.650x |
+
+Zod is not in the first-error suites (no first-error mode); TypeBox collects up to 8 errors and the first is read. The old version has no `safeParse` and no `is()`, so its all-issues suites are not comparable and its check suites use `try`/`catch`. Input in every suite is a pool of 8 identical objects indexed by call number. The "benchmarks" repo (`results/latest.json`) is a separate, older measurement and is not updated by this release.
 
 ---
 
@@ -138,6 +165,8 @@ import {
   discriminatedUnion,
   flattenIssues,
   isoDate,
+  configure,
+  is,
   isVetaError,
   lazy,
   picklist,
@@ -182,6 +211,7 @@ import {
   type VetaIssue,
   type VetaIssueCode,
   type VetaErrorOptions,
+  type VetaOptions,
   type SafeParseResult,
   type SafeParseOptions,
   type FlattenedIssues,
@@ -834,6 +864,60 @@ objectAsync({
   },
 });
 ```
+
+---
+
+## Checking Without Throwing: `is()`
+
+`is(validator, value, ctx?)` answers "would this validator accept the value?" with a boolean. It builds no result and no error, which makes it the fast form of a check on a hot path:
+
+```ts
+import { is, object, string, number } from "@coderbuzz/veta";
+
+const user = object({ name: string({ min: 2 }), age: number({ min: 0 }) });
+
+if (is(user, input)) {
+  // input is accepted by user(input)
+}
+```
+
+`is(v, x)` is `true` exactly when `v(x)` returns and `safeParse(v, x).ok` is `true`. A `VetaError` becomes `false`; any other error (a bug in your own validator) still propagates. `is()` is sync only: with an async validator (`objectAsync`, an `async` function) it throws a `TypeError`, so use `safeParseAsync` there. It narrows nothing at the type level; call the validator when you need the typed value.
+
+## Settings: `configure()`
+
+Veta compiles `object()` and `union()` schemas, and `is()`, to straight-line code with `new Function`. The plain closures stay as the reference and as the fallback. You rarely need to touch this:
+
+```ts
+import { configure } from "@coderbuzz/veta";
+
+configure({ codegen: false }); // { codegen: false }
+```
+
+`configure(options: { codegen?: boolean }): { codegen: boolean }` returns the effective settings. Where `new Function` is blocked (Cloudflare Workers, a CSP without `unsafe-eval`), `codegen` is `false` and `configure({ codegen: true })` leaves it `false`; veta falls back to the closures on its own, with the same results. Call `configure` before building your schemas: `object()` and `union()` compile when they are built. A non-boolean `codegen` throws a `TypeError`.
+
+Two observable differences: `err.stack` shows veta's public frames, not its internal ones, and when a parse fails the closure runs again to build the error, so a getter on the input may be read twice. A very large schema (about 40 fields or more) keeps the closures.
+
+### Reference
+
+```ts
+function is(validator: (val: any, ctx?: any) => unknown, value: unknown, ctx?: any): boolean;
+
+interface VetaOptions { codegen?: boolean }
+function configure(options: VetaOptions): Required<VetaOptions>;   // => { codegen: boolean }
+```
+
+- `is(v, x, ctx)` mirrors `safeParse(v, x, ctx)`: `true` iff `v(x, ctx)` returns normally and `safeParse(v, x, ctx).ok`. The one theoretical difference is a corpus case where `safeParse` continues past the first field failure and then hits a non-`VetaError` in a later field; `is()` stops at the first `VetaError`, like `v(x)`, and returns `false`.
+- Built-in sync validators are decided by generated code (no result object, no `VetaError`, no allocation). A node without a code emitter (a custom function, `pipe()`, `refine()`/`check()`, `lazy()`, `withContext()`, `decimal()`, `isoDate()`, `uint8array()`, `discriminatedUnion()`, `coerce(bigint/decimal/isoDate)`, any async validator) is run as the closure inside a `try`, and only a `VetaError` means "no". A non-`VetaError` thrown by your code propagates.
+- Async: if the validator (or a child of a sync object) returns a promise, `is()` throws `TypeError("is(): the validator returned a promise; use safeParseAsync() ...")` and swallows that promise's rejection, so there is no unhandled rejection. It never returns `true` for a promise.
+- The compiled check is memoised on the validator (a module-private symbol property, set only when the function is extensible) at the first `is()` call. A validator that was already checked does not follow a later `configure()`.
+- `is()` does not narrow types. Use the validator itself (or `safeParse`) when you need the typed value.
+- `configure({ codegen })` validates its argument (`typeof codegen === "boolean"`, else `TypeError("configure({ codegen }): must be a boolean, got <type>")`) and returns the effective settings. Effective `codegen` = requested value AND `new Function` works (probed once at module load with `new Function("return 1")()`). In Cloudflare Workers, under a CSP without `unsafe-eval`, or when `globalThis.Function` throws, it stays `false`; `configure({ codegen: true })` cannot enable it.
+- `object()` and `union()` compile when they are built, so the switch affects only schemas built after the call. Set it at startup, before importing modules that build schemas.
+- Codegen applies to a schema whose nodes have emitters; the generated parse falls back to the closure as soon as one input fails, and the closure throws the identical `VetaError` (same message, path, code, params, reason, issues). Only the stack differs: veta's internal leaf frames are gone, and the generated function frame never appears (strict-mode tail call).
+- The generated code is bounded: at most 64 nodes and about 16 KB of source per compiled function (roughly 40 fields of `string({ min, max })`); a larger or shared-subtree (diamond) schema stays on the closures at definition time, with identical results. A parse whose tree contains user code that cannot be re-run safely (`withDefault(() => x)`, a custom function in a parse path) also keeps the closure for parse, so no user code runs twice; `safeParse` collection is still compiled.
+- Generated code never interpolates raw strings: every key, message and literal goes through `JSON.stringify` or a closed-over constant, and `-0` is preserved.
+- A getter on the input object may run twice for an input that fails: once in the generated check and once in the closure that builds the error. Do not put side effects in input getters.
+- Differential tests (`tests/codegen.test.ts`, `tests/golden`) run the whole golden corpus and a seeded fuzz with codegen on and off and require identical outcomes.
 
 ---
 
@@ -1639,6 +1723,13 @@ const user = userSchema({
     union instead of letting the next variant match.
 17. **Use `isoDate()` for calendar dates**: a `Date` from `"2024-01-15"` is UTC
     midnight and reads as the 14th west of Greenwich.
+18. **`is()` is sync only**: an async validator makes it throw a `TypeError`
+    (use `safeParseAsync`). It never returns `true` for a promise.
+19. **Codegen is invisible except in three places**: `err.stack` has no veta
+    internal frames, a failed parse may read an input getter twice, and
+    `configure({ codegen })` affects only schemas built after the call.
+    `configure({ codegen: false })` is the first thing to try when you suspect
+    generated code; results must be identical.
 
 ---
 
