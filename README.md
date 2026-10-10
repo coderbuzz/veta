@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@2180779 -->
+<!-- docs: sync from coderbuzz/codex@ef21ff0 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -50,27 +50,22 @@ Veta matches **Zod's type inference quality** at ~9.5 KB min+gzip (vs. Zod's ~35
 
 ## Benchmarks
 
-Measured with the in-repo suite (`bun run bench -- --pkg veta`), not the public benchmarks repo: Intel Xeon Platinum 8255C @ 2.50GHz, 4 vCPU Linux VM, Bun 1.4.2, 2 processes x 8 kept rounds of 300 ms each, 2026-10-10 (codex `cfada03`, veta 0.6.2). Competitors: Zod 4.6.5, Valibot 1.5.0, TypeBox 1.3.36, ArkType 2.2.8, Joi 18.2.9, Yup 1.7.1. "Before" is veta 0.2.23 (`cca8983`), the version before the 2026-09 performance work, measured in the same run. Higher is better; "Before" checks use `try`/`catch` (the old version has no `is()`); ratios are paired per round (median), and every difference listed as a win passed the suite's noise rule (the gap exceeds 3x the larger coefficient of variation, and the per-process ranges do not overlap).
+Numbers from the public benchmarks repo, [coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks) (`results/latest.json`): the repo's cloud reference machine (Intel Xeon @ 2.10GHz, CPU model 207, 4 cores, Linux x64), Bun 1.4.2, run of 2026-10-10 (benchmarks `131fcc5`). Veta 0.6.2 against Zod 4.6.5, TypeBox 1.3.34 (`Compile`), Joi 18.2.9 and Yup 1.7.1. Each figure is ops/s, the best of 3 processes; higher is better.
 
-| Suite | veta | Zod | vs Zod | Before | vs before |
-|---|---|---|---|---|---|
-| Simple object, boolean check `is()` | **103.8M ops/s** | 3.31M | **31.4x** | 21.4M | 4.82x |
-| Simple object, parse | **45.1M ops/s** | 3.2M | **14.1x** | 20.3M | 2.22x |
-| Simple object, all issues (`safeParse`) | **4.09M ops/s** | 0.32M | **12.8x** | n/a | n/a |
-| Complex nested object + coercion, `is()` | **10.2M ops/s** | 0.833M | **12.2x** | 1.33M | 7.71x |
-| Complex nested object + coercion, parse | **3.56M ops/s** | 0.716M | **4.95x** | 0.995M | 3.54x |
-| Complex nested object, all issues (`safeParse`) | **1.72M ops/s** | 0.194M | **8.83x** | n/a | n/a |
-| `coerce(number/boolean/string/date)` object, parse | **8.21M ops/s** | 4.03M | **2.05x** | 6.22M | 1.32x |
-| Union, `is()` | **53.3M ops/s** | 1.56M | **34.2x** | 0.271M | 195x |
-| Union, parse | **31.1M ops/s** | 1.6M | **19.6x** | 0.271M | 116x |
+| Row | Veta | Zod | TypeBox | Result |
+|---|---|---|---|---|
+| Check (boolean), `is()` | **131.6M** | 5.12M | 121.4M | **Veta**, 1.08x TypeBox |
+| Simple validation, parse | 78.6M | 5.28M | **114.1M** | TypeBox, 1.45x Veta (see below) |
+| Complex nested object + coercion | **6.77M** | 1.38M | 0.106M | **Veta**, 4.9x Zod |
+| Error handling (throw) | **0.639M** | 0.412M | 0.303M | **Veta**, 1.45x Joi |
+| Error, first issue | **1.83M** | 0.600M | 0.306M | **Veta**, 3.0x Zod |
+| Coercion | **17.7M** | 8.30M | 0.046M | **Veta**, 2.1x Zod |
 
-First-error suites (`safeParse(..., { maxIssues: 1 })`; Zod has no such mode): 0.85M ops/s on the simple object (2.5x before), 0.70M on the complex one (2.8x before).
-
-Where veta is not ahead: on the simple-object `is()` suite veta and TypeBox are level (103.8M vs 101.2M, inside the noise rule); on the union `is()` suite ArkType is fastest (veta 0.88x) and TypeBox is level with veta; TypeBox is faster on the simple-object and union parse suites (veta 0.54x and 0.77x, see the next paragraph); Valibot is faster on the first-error suites. Veta is ahead of every competitor on the complex-object suites, coerce and both all-issues suites. "n/a": the old version has no `safeParse`.
+The Check lead over TypeBox is 8%, inside the spread between machines: treat it as "at least level", not as a margin. Valibot and ArkType are not in the public benchmarks, so these docs make no claim against them.
 
 **Parse is not TypeBox's `Parse`.** A veta parse returns a new object: unknown keys are stripped, coercions and defaults are applied, and the caller's object is never returned or changed. TypeBox's `Parse` checks the value and returns that same object, extra keys included. The parse rows therefore compare different work. The like-for-like counterpart of TypeBox's `Parse` (and `Check`) is `is()`: decide, keep the input. When you only need a yes or no and will use the input as it is, call `is()`; when you need the clean object, the parse does the extra work on purpose.
 
-> Numbers move with the machine. Run them yourself: `bun run bench -- --pkg veta`. The public benchmarks repo ([github.com/coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks)) measures on its own reference machine; there veta 0.6.2 leads TypeBox on the boolean check (120.7M vs 111.4M ops/s).
+> Numbers move with the machine; compare them only within one run. The source of truth is `https://raw.githubusercontent.com/coderbuzz/benchmarks/main/results/latest.json`. The in-repo suites (`bun run bench -- --pkg veta|velox`) are development tools for A/B runs between versions; their numbers are not published.
 
 ---
 
