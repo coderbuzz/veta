@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@ef21ff0 -->
+<!-- docs: sync from coderbuzz/codex@8854676 -->
 
 # Veta: `@coderbuzz/veta`
 
@@ -814,8 +814,8 @@ status("closed"); // throws 'Expected one of: "draft", "posted", "void"'
 ```
 
 `union([literal("draft"), literal("posted"), ...])` does the same job by trying
-each literal in turn and building an error for every miss: about 4.4 µs to
-match the fourth of four options, against 23 ns for `picklist`'s `Set` lookup.
+each literal in turn and building an error for every miss, which is far slower
+than `picklist`'s single `Set` lookup.
 Its error also lists `Variant 0: ... Variant 3: ...`. `picklist` carries union-
 of-literal metadata, so `@coderbuzz/proto` encodes it.
 
