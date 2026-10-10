@@ -1,4 +1,4 @@
-<!-- docs: sync from coderbuzz/codex@8854676 -->
+<!-- docs: sync from coderbuzz/codex@5aee801 -->
 
 # VETA: AI Agent Knowledge File
 
@@ -43,18 +43,18 @@ Veta matches Zod's type inference quality while being significantly lighter and 
 
 ## Benchmarks
 
-Numbers from the public benchmarks repo, [coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks) (`results/latest.json`): the repo's cloud reference machine (Intel Xeon @ 2.10GHz, CPU model 207, 4 cores, Linux x64), Bun 1.4.2, run of 2026-10-10 (benchmarks `131fcc5`). Veta 0.6.2 against Zod 4.6.5, TypeBox 1.3.34 (`Compile`), Joi 18.2.9 and Yup 1.7.1. Each figure is ops/s, the best of 3 processes; higher is better.
+Numbers from the public benchmarks repo, [coderbuzz/benchmarks](https://github.com/coderbuzz/benchmarks) (`results/latest.json`): the repo's reference VM (Intel Xeon Platinum 8255C @ 2.50GHz, 4 cores, Linux x64), Bun 1.4.3, run of 2026-10-10 (benchmarks `6ed4ccf`). Veta 0.6.2 against Zod 4.6.5, TypeBox 1.3.34 (`Compile`), Joi 18.2.9 and Yup 1.7.1. Each figure is ops/s, the best of 3 processes; higher is better.
 
 | Row | Veta | Zod | TypeBox | Result |
 |---|---|---|---|---|
-| Check (boolean), `is()` | **131.6M** | 5.12M | 121.4M | **Veta**, 1.08x TypeBox |
-| Simple validation, parse | 78.6M | 5.28M | **114.1M** | TypeBox, 1.45x Veta (see below) |
-| Complex nested object + coercion | **6.77M** | 1.38M | 0.106M | **Veta**, 4.9x Zod |
-| Error handling (throw) | **0.639M** | 0.412M | 0.303M | **Veta**, 1.45x Joi |
-| Error, first issue | **1.83M** | 0.600M | 0.306M | **Veta**, 3.0x Zod |
-| Coercion | **17.7M** | 8.30M | 0.046M | **Veta**, 2.1x Zod |
+| Check (boolean), `is()` | **108.7M** | 2.80M | 84.0M | **Veta**, 1.30x TypeBox |
+| Simple validation, parse | 58.8M | 3.20M | **79.4M** | TypeBox, 1.35x Veta (see below) |
+| Complex nested object + coercion | **4.44M** | 0.972M | 0.071M | **Veta**, 4.6x Zod |
+| Error handling (throw) | **0.360M** | 0.252M | 0.182M | **Veta**, 1.04x Joi |
+| Error, first issue | **1.16M** | 0.460M | 0.213M | **Veta**, 2.5x Zod |
+| Coercion | **13.0M** | 5.88M | 0.031M | **Veta**, 2.2x Zod |
 
-The Check lead over TypeBox is 8%, inside the spread between machines: treat it as "at least level", not as a margin. Valibot and ArkType are not in the public benchmarks, so these docs make no claim against them.
+The Error handling lead over Joi is 4%, inside run-to-run noise: treat it as level, not as a margin. Valibot and ArkType are not in the public benchmarks, so these docs make no claim against them.
 
 **Parse is not TypeBox's `Parse`.** A veta parse returns a new object: unknown keys are stripped, coercions and defaults are applied, and the caller's object is never returned or changed. TypeBox's `Parse` checks the value and returns that same object, extra keys included. The parse rows therefore compare different work. The like-for-like counterpart of TypeBox's `Parse` (and `Check`) is `is()`: decide, keep the input. When you only need a yes or no and will use the input as it is, call `is()`; when you need the clean object, the parse does the extra work on purpose.
 
@@ -66,19 +66,19 @@ Full entries of this run (ops/s):
 
 | Suite | Veta | Zod | Joi | TypeBox | Yup |
 |---|---|---|---|---|---|
-| veta-check | **131,555,015** | 5,117,033 | 789,365 | 121,410,786 | 146,538 |
-| veta-simple | 78,604,426 | 5,283,428 | 811,692 | **114,091,576** | 154,756 |
-| veta-complex | **6,772,171** | 1,377,517 | 153,847 | 106,139 | 35,129 |
-| veta-error | **638,665** | 411,635 | 441,046 | 303,488 | 137,538 |
-| veta-error-first | **1,827,809** | 600,196 | 407,036 | 306,123 | 143,414 |
-| veta-coerce | **17,711,347** | 8,299,671 | 474,189 | 46,350 | 137,986 |
+| veta-check | **108,743,253** | 2,795,746 | 463,527 | 83,959,185 | 92,226 |
+| veta-simple | 58,784,623 | 3,196,653 | 555,102 | **79,410,046** | 105,094 |
+| veta-complex | **4,439,671** | 972,206 | 105,698 | 70,556 | 24,029 |
+| veta-error | **359,919** | 252,204 | 347,177 | 182,190 | 76,613 |
+| veta-error-first | **1,155,315** | 459,566 | 346,069 | 212,810 | 82,980 |
+| veta-coerce | **13,031,744** | 5,877,185 | 393,516 | 31,176 | 99,302 |
 
 Inputs: the Simple and Check rows alternate two valid objects per call; Complex and Coerce build a fresh input per call (TypeBox's `Convert` mutates its input); Error and first-issue rows use one invalid object. Veta's Check row calls `is()` directly, the first-issue row `safeParse(v, x, undefined, { maxIssues: 1 })`; TypeBox's first issue is `Errors(x)[0]`.
 
 What TypeBox's `Parse` does and veta's parse does not skip, for agents comparing the two:
 
 - Unknown keys: veta `object()` strips them by default (`unknownKeys: 'strip'`; `'error'` rejects, `'passthrough'` copies them). TypeBox keeps them in the returned value, or rejects the value with `additionalProperties: false`; it never strips.
-- Coercion, defaults, transforms: applied by the veta parse. TypeBox runs them in separate calls (`Convert`, `Default`, `Decode`); in the complex row, which needs them, TypeBox is about 64x slower.
+- Coercion, defaults, transforms: applied by the veta parse. TypeBox runs them in separate calls (`Convert`, `Default`, `Decode`); in the complex row, which needs them, TypeBox is about 63x slower.
 - Identity: the veta result is always a new plain object (`Object.prototype` as prototype, never a value inherited from it, `__proto__` written as an own key, VETA-28); the input is not mutated. TypeBox returns the input object itself, including a class instance with its prototype.
 - So `is(v, x)` is the veta call to compare with TypeBox `Check`/`Parse`. Returning the input from a veta parse when nothing would change is not done: it breaks the documented contract ("returns a new object"), lets a caller's write to the result change the input, and needs an own-key count (`Object.keys`) on every call to prove there are no extra keys.
 
